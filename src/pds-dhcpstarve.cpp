@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "include/pds-dhcpstarve.h"
+#include "include/pds-dhcpCore.h"
 
 int main(int argc, char* argv[])
 {
@@ -38,5 +39,8 @@ int main(int argc, char* argv[])
 	std::cout << "Interface: " << chosenInterface << std::endl;
 
 	// create instance of dhcp starve core class
+	DHCPCore* dhcpInstance = new DHCPCore();
+	dhcpInstance->getDeviceIPAddressNetMask(chosenInterface);
 
+	delete(dhcpInstance);
 }
