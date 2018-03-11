@@ -77,8 +77,15 @@ int main(int argc, char* argv[])
 		delete(dhcpCoreInstance);
 		exit(1);
 	}
+
+	// BEFORE SENDIND - create socket to catch response
+
+
 	// send message
 	send(sock, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0);
+
+	// wait for response
+
 
 	delete(dhcpCoreInstance);
 	exit(0);
