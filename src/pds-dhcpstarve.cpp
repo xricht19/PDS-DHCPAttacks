@@ -39,8 +39,47 @@ int main(int argc, char* argv[])
 	std::cout << "Interface: " << chosenInterface << std::endl;
 
 	// create instance of dhcp starve core class
-	DHCPCore* dhcpInstance = new DHCPCore();
-	dhcpInstance->getDeviceIPAddressNetMask(chosenInterface);
+	DHCPCore* dhcpCoreInstance = new DHCPCore();
+	dhcpCoreInstance->getDeviceIPAddressNetMask(chosenInterface);
 
-	delete(dhcpInstance);
+	// create DHCP Discover message
+	dhcpCoreInstance->createDHCPDiscoverMessage();
+	if (dhcpCoreInstance->isError())
+	{
+		// error occured tidy up and exit
+		delete(dhcpCoreInstance);
+		exit(1);
+	}
+
+	// create socket and send message
+	int sock = 0;
+	if ((sock = socket (AF_INET, SOCK_DGRAM, 0)) < 0)
+	{
+		fprintf(stderr, "Cannot create socket.");
+		delete(dhcpCoreInstance);
+		exit(1);
+	}
+	struct sockaddr_in address;
+	struct sockaddr_in serverAddress;
+	serverAddress.sin_family = AF_INET;
+	serverAddress.sin_port = htons(DHCP_SERVER_PORT);
+	// set IPv4 broadcast
+	if ((inet_pton(AF_INET, DHCP_SERVER_ADDRESS, &serverAddress.sin_addr)) <= 0)
+	{
+		fprintf(stderr, "Cannot set server address (%s) -> inet_pton error.", DHCP_SERVER_ADDRESS);
+		delete(dhcpCoreInstance);
+		exit(1);
+	}
+	// connect socket
+	if (connect(sock, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0)
+	{
+		fprintf(stderr, "Cannot connect socket to address.");
+		delete(dhcpCoreInstance);
+		exit(1);
+	}
+	// send message
+	send(sock, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0);
+
+	delete(dhcpCoreInstance);
+	exit(0);
 }
