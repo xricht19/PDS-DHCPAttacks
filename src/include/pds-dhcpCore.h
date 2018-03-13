@@ -17,6 +17,8 @@
 #include <iostream>
 #include <ctime>
 
+#define _DEBUG_
+
 // DHCP Message settings
 #define DHCPCORE_CHADDR_LENGTH 16
 #define DHCPCORE_BROADCAST_FLAG 32768
@@ -31,6 +33,14 @@
 #define DHCPCORE_DISCOVER_SERVER_IP "0.0.0.0"
 #define DHCPCORE_DISCOVER_GATEWAY_IP "0.0.0.0"
 // DHCP Offer settings
+
+// DHCP Request settings
+#define DHCPCORE_REQUEST_OP 1 // BOOTREQUEST
+#define DHCPCORE_DISCOVER_CLIENT_IP "0.0.0.0"
+#define DHCPCORE_DISCOVER_YOUR_IP "0.0.0.0"
+#define DHCPCORE_DISCOVER_SERVER_IP "0.0.0.0"
+#define DHCPCORE_DISCOVER_GATEWAY_IP "0.0.0.0"
+
 
 class DHCPCore
 {
@@ -62,12 +72,15 @@ public:
 	char* getMessage();
 	int getSizeOfMessage();
 
+	struct in_addr getDeviceIP() { struct in_addr ip = _deviceIP; return ip; }
+
 private:
 	// varible flag for errors
 	enum ERROROPTIONS
 	{
 		OK = 0,
 		INET_ATON_ERROR,
+		CANNOT_FIND_GIVEN_DEVICE_IP,
 	};
 	ERROROPTIONS _errorType;
 	// device info

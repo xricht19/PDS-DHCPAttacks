@@ -3,6 +3,7 @@
 #include "include/pds-dhcpstarve.h"
 #include "include/pds-dhcpCore.h"
 
+
 int main(int argc, char* argv[])
 {
 	// parse the parameters using getopt
@@ -41,6 +42,12 @@ int main(int argc, char* argv[])
 	// create instance of dhcp starve core class
 	DHCPCore* dhcpCoreInstance = new DHCPCore();
 	dhcpCoreInstance->getDeviceIPAddressNetMask(chosenInterface);
+	if (dhcpCoreInstance->isError())
+	{
+		// error occured tidy up and exit
+		delete(dhcpCoreInstance);
+		exit(1);
+	}
 
 	// create DHCP Discover message
 	dhcpCoreInstance->createDHCPDiscoverMessage();
@@ -61,6 +68,7 @@ int main(int argc, char* argv[])
 	}
 	struct sockaddr_in address;
 	struct sockaddr_in serverAddress;
+	serverAddress.sin_addr = dhcpCoreInstance->getDeviceIP();
 	serverAddress.sin_family = AF_INET;
 	serverAddress.sin_port = htons(DHCP_SERVER_PORT);
 	// set IPv4 broadcast

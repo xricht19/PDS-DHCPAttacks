@@ -104,24 +104,11 @@ void DHCPCore::waitForAndProcessDHCPOffer()
 }
 
 
-/*int DHCPCore::startDHCPStarvation()
-{
-	// TO-DO: is everything send using broadcast??
-
-
-	// send dhcp discover
-
-	// wait for response dhcp offer - more than one DHCP server?? || dhcp in different net
-
-	// send dhcp request
-
-	// wait for dhcp pack for confirmation, that the IP adrress is really blocked
-
-	return 0;
-}*/   //TO-DO: Move to DHCP Starve
-
 void DHCPCore::getDeviceIPAddressNetMask(std::string deviceName)
 {
+	// set error to true
+	_errorType = CANNOT_FIND_GIVEN_DEVICE_IP;
+
 	struct ifaddrs * ifAddrStruct = NULL;
 	struct ifaddrs * ifa = NULL;
 	void * tmpAddrPtr = NULL;
@@ -139,16 +126,18 @@ void DHCPCore::getDeviceIPAddressNetMask(std::string deviceName)
 		if (ifa->ifa_addr->sa_family == AF_INET) { 
 			if (strcmp(ifa->ifa_name, deviceName.c_str()) == 0)
 			{
-				printf("Found correct device. YEY!\n");
 				tmpAddrPtr = &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+#ifdef _DEBUG_
 				// load address to buffer
+				printf("Found correct device. YEY!\n");
 				char addressBuffer[INET_ADDRSTRLEN];
 				inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
 				printf("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
+#endif
 				// save info
 				_deviceInfo = *ifa;
 				_deviceIP = ((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
-
+				_errorType = OK;
 			}
 		}
 		// check if it is valid IP6 address -> not using, skip
@@ -185,6 +174,9 @@ void DHCPCore::printDHCPCoreError() const
 	{
 	case ERROROPTIONS::INET_ATON_ERROR:
 		fprintf(stderr, "Cannot convert string IP Address to byte order using 'inet_aton'!/n");
+		break;
+	case ERROROPTIONS::CANNOT_FIND_GIVEN_DEVICE_IP:
+		fprintf(stderr, "Cannot get IP Address of given device!\n");
 		break;
 	case ERROROPTIONS::OK: // just to have everything covered, should not get here if not error
 	default:
