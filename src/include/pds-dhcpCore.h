@@ -52,13 +52,14 @@ public:
 	void createDHCPDiscoverMessage();
 	/*bool createDHCPOfferMessage();
 	bool createDHCPRequestMessage();
-	bool createDHCPPackMessage();
+	bool createDHCPPackMessage();*/
 
-	void waitForAndProcessDHCPDiscover();*/
-	void waitForAndProcessDHCPOffer();
+	//void waitForAndProcessDHCPDiscover();
+	void ProcessDHCPOfferMessage(char* message, int messageLength);
 	/*void waitForAndProcessDHCPRequest();
 	void waitForAndProcessDHCPAck();
 	*/
+
 	// get device IP address
 	void getDeviceIPAddressNetMask(std::string deviceName);
 
@@ -67,7 +68,9 @@ public:
 	void printDHCPCoreError() const;
 
 	// clean everything from dhcpCore, end the end or after error
-	void cleanDhcpCore();
+	void cleanDHCPCore();
+	// init dhcp core class to be able to process new message
+	void initDHCPCore();
 
 	char* getMessage();
 	int getSizeOfMessage();
@@ -81,6 +84,7 @@ private:
 		OK = 0,
 		INET_ATON_ERROR,
 		CANNOT_FIND_GIVEN_DEVICE_IP,
+		NON_VALID_MESSAGE,
 	};
 	ERROROPTIONS _errorType;
 	// device info

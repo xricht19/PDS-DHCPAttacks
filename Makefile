@@ -9,10 +9,10 @@ LDIR =../lib
 
 LIBS=-lm
 
-_DEPS = pds-dhcpstarve.h pds-dhcpCore.h
+_DEPS = pds-dhcpstarve.h pds-dhcpCore.h pds-RawSocketHelper.h
 DEPS = $(patsubst %,$(IDIR)/%,$(_DEPS))
 
-_OBJ = pds-dhcpstarve.o pds-dhcpCore.o
+_OBJ = pds-dhcpstarve.o pds-dhcpCore.o pds-RawSocketHelper.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 

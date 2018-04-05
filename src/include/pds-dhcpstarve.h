@@ -2,7 +2,12 @@
 #define _PDSDHCPSTARVE_H
 
 #include <unistd.h>
+#include <netinet/udp.h>
+#include <netinet/ip.h>
 #include <string>
+#include <stdint.h>
+
+#include <iostream>
 
 // general DHCP settings
 #define DHCP_CLIENT_PORT 68
@@ -15,7 +20,6 @@ enum ERR_CODES {
 	INCORRECT_PARAMS,
 
 };
-
 
 
 

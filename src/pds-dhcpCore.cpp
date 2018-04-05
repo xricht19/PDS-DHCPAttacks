@@ -10,10 +10,10 @@ DHCPCore::DHCPCore() : _dhcpMessage(nullptr), _dhcp_xid(0)
 
 DHCPCore::~DHCPCore()
 {
-	cleanDhcpCore();
+	cleanDHCPCore();
 }
 
-void DHCPCore::cleanDhcpCore()
+void DHCPCore::cleanDHCPCore()
 {
 	// free dhcp message if exists
 	if (_dhcpMessage != nullptr)
@@ -21,6 +21,17 @@ void DHCPCore::cleanDhcpCore()
 		// TO-DO: THE DELETION OF SOME INNER PART MAY BE NEEDED.
 		delete(_dhcpMessage);
 	}
+}
+
+void DHCPCore::initDHCPCore()
+{
+	// free dhcp message if exists
+	if (_dhcpMessage != nullptr)
+	{
+		// TO-DO: THE DELETION OF SOME INNER PART MAY BE NEEDED.
+		delete(_dhcpMessage);
+	}
+	_dhcpMessage = new dhcp_packet();
 }
 
 char* DHCPCore::getMessage()
@@ -56,8 +67,8 @@ void DHCPCore::genAndSetMACAddress()
  */
 void DHCPCore::createDHCPDiscoverMessage()
 {
-	// create new dhcp message
-	_dhcpMessage = new dhcp_packet();
+	// init dhcp core to prepare it for new message
+	initDHCPCore();
 	// start set values
 	_dhcpMessage->op = DHCPCORE_DISCOVER_OP;
 	_dhcpMessage->htype = DHCPCORE_HTYPE;
@@ -91,16 +102,33 @@ void DHCPCore::createDHCPDiscoverMessage()
 	_dhcpMessage->options[3] = '\x63';
 
 	/* DHCP message type is embedded in options field */
-	_dhcpMessage->options[4] = 53;    /* DHCP message type option identifier */
-	_dhcpMessage->options[5] = '\x01';               /* DHCP message option length in bytes */
+	_dhcpMessage->options[4] = 53;					/* DHCP message type option identifier */
+	_dhcpMessage->options[5] = '\x01';              /* DHCP message option length in bytes */
 	_dhcpMessage->options[6] = 1;
 
 	// end option
-	_dhcpMessage->options[7] = 255;
+	_dhcpMessage->options[7] = 255;					/* DHCP message end of options */
 }
 
-void DHCPCore::waitForAndProcessDHCPOffer()
+void DHCPCore::ProcessDHCPOfferMessage(char* message, int messageLength)
 {
+	if (messageLength <= 0)
+	{
+		_errorType = NON_VALID_MESSAGE;
+		return;
+	}
+
+	// init dhcp class and fill it with message
+	initDHCPCore();
+	std::memcpy(_dhcpMessage, message, messageLength * sizeof(char));
+
+	fprintf(stdout, "Op: %d\n", _dhcpMessage->op);
+	fprintf(stdout, "Type: %d\n", _dhcpMessage->htype);
+	fprintf(stdout, "hlen: %d\n", _dhcpMessage->hlen);
+	fprintf(stdout, "hops: %d\n", _dhcpMessage->hops);
+	fprintf(stdout, "xid: 0x%08X\n", _dhcpMessage->xid);
+	fprintf(stdout, "secs: %d\n", _dhcpMessage->secs);
+	fprintf(stdout, "flags: %d\n", _dhcpMessage->flags);
 }
 
 
@@ -161,8 +189,6 @@ bool DHCPCore::isError()
 	if(_errorType != ERROROPTIONS::OK)
 	{
 		printDHCPCoreError();
-		// call function to clean everything and return true
-		cleanDhcpCore();
 		return true;
 	}
 	return false;
@@ -178,9 +204,11 @@ void DHCPCore::printDHCPCoreError() const
 	case ERROROPTIONS::CANNOT_FIND_GIVEN_DEVICE_IP:
 		fprintf(stderr, "Cannot get IP Address of given device!\n");
 		break;
-	case ERROROPTIONS::OK: // just to have everything covered, should not get here if not error
+	case ERROROPTIONS::NON_VALID_MESSAGE:
+		fprintf(stderr, "Message received as answer is not valid!\n");
+		break;
 	default:
-		fprintf(stderr, "Something happened! (Windows style error message :).");
+		fprintf(stderr, "Something happened! Sadly, I cannot continue.");
 	}
 }
 
