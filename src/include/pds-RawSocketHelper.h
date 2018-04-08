@@ -36,6 +36,7 @@ private:
 		uint8_t protocol;
 		uint16_t udp_length;
 	};
+	pseudoUDPHeader _pseudoHeader;
 
 	enum ErrorStates
 	{
@@ -54,6 +55,8 @@ public:
 	void CreateRawSocket(int domain, int protocol);
 	int GetRawSocket();
 	void BindRawSocket(sockaddr_in* interfaceSettings);
+	void FillIPHeader(sockaddr_in* srcIP, sockaddr_in* destIP);
+	void FillUDPHeader(uint16_t srcPort, uint16_t dstPort);
 
 	bool isErrorOccure();
 	void printError(FILE* channel = stderr);
