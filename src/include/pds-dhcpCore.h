@@ -50,8 +50,8 @@ public:
 
 	// DHCP messages
 	void createDHCPDiscoverMessage();
-	/*bool createDHCPOfferMessage();
-	bool createDHCPRequestMessage();
+	void createDHCPOfferMessage();
+	/*bool createDHCPRequestMessage();
 	bool createDHCPPackMessage();*/
 
 	//void waitForAndProcessDHCPDiscover();

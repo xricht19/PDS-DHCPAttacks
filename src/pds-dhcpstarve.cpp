@@ -88,132 +88,58 @@ int main(int argc, char* argv[])
 	// SOCKET FOR SENDING --------------------------------------------------------------------
 	// create socket and send message 
 	int senderSocket = 0;
-	/*if ((senderSocket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+	if ((senderSocket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
 	{
 		fprintf(stderr, "Cannot create socket.");
 		delete(dhcpCoreInstance);
 		exit(1);
 	}
 
-	struct sockaddr_in interfaceSettings;
-	struct sockaddr_in serverSettings;
-	// set parameter and bind to socket to specific interface
-	interfaceSettings.sin_family = AF_INET;
-	interfaceSettings.sin_addr = dhcpCoreInstance->getDeviceIP();
-	interfaceSettings.sin_port = htons(DHCP_CLIENT_PORT);
-	if (bind(senderSocket, (sockaddr*)&interfaceSettings, sizeof(interfaceSettings)) < 0)
-	{ // cannot bind socket to given address and port
-		fprintf(stderr, "Cannot bind socket to interface: %s.", chosenInterface.c_str());
-		printf("Oh dear, something went wrong with read()! %s\n", strerror(errno));
+	// bind socket to given interface
+	struct ifreq ifr;
+	memset(&ifr, 0, sizeof(ifr));
+	memcpy(&ifr.ifr_name, chosenInterface.c_str(), sizeof(ifr.ifr_name));
+	if(setsockopt(senderSocket, SOL_SOCKET, SO_BINDTODEVICE, (void*)&ifr, sizeof(ifr)) < 0)
+	{
+		fprintf(stderr, "Cannot assign socket to interface: %s. %s\n", chosenInterface.c_str(), strerror(errno));
 		delete(dhcpCoreInstance);
 		exit(1);
 	}
+	// enable broadcast on socket
+	int optVal = 1;
+	if(setsockopt(senderSocket, SOL_SOCKET, SO_BROADCAST, &optVal, sizeof(optVal)) < 0)
+	{
+		fprintf(stderr, "Cannot set socket to broadcast: %s. %s\n", chosenInterface.c_str(), strerror(errno));
+		delete(dhcpCoreInstance);
+		exit(1);
+	}
+	if(setsockopt(senderSocket, SOL_SOCKET, SO_REUSEADDR, &optVal, sizeof(optVal)) < 0)
+	{
+		fprintf(stderr, "Cannot set socket to broadcast: %s. %s\n", chosenInterface.c_str(), strerror(errno));
+		delete(dhcpCoreInstance);
+		exit(1);
+	}	
+	struct sockaddr_in interfaceSettings;
+	// set parameter and bind to socket to specific interface
+	interfaceSettings.sin_family = AF_INET;
+	interfaceSettings.sin_port = htons(DHCP_CLIENT_PORT);
+	interfaceSettings.sin_addr.s_addr = INADDR_ANY;
+	if (bind(senderSocket, (sockaddr*)&interfaceSettings, sizeof(interfaceSettings)) < 0)
+	{ // cannot bind socket to given address and port
+		fprintf(stderr, "Cannot bind socket to interface: %s. %s\n", chosenInterface.c_str(), strerror(errno));
+		delete(dhcpCoreInstance);
+		exit(1);
+	}
+	
 	// set parameters for server address and connect socket to it
+	struct sockaddr_in serverSettings;
+	memset(&serverSettings, 0, sizeof serverSettings);
 	serverSettings.sin_family = AF_INET;
 	serverSettings.sin_port = htons(DHCP_SERVER_PORT);
 	// set IPv4 broadcast
 	if ((inet_pton(AF_INET, DHCP_SERVER_ADDRESS, &serverSettings.sin_addr)) <= 0)
 	{
-		fprintf(stderr, "Cannot set server address (%s) -> inet_pton error.", DHCP_SERVER_ADDRESS);
-		delete(dhcpCoreInstance);
-		exit(1);
-	}
-	// connect socket
-	if (connect(senderSocket, (struct sockaddr *)&serverSettings, sizeof(serverSettings)) < 0)
-	{
-		fprintf(stderr, "Cannot connect socket to address.");
-		delete(dhcpCoreInstance);
-		exit(1);
-	}*/
-
-	if ((senderSocket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0)
-	{
-		fprintf(stderr, "Cannot create socket.");
-		delete(dhcpCoreInstance);
-		exit(1);
-	}
-	
-	// create array for packet and init it
-	char datagram[ETHERNET_MTU];
-	memset(datagram, 0, ETHERNET_MTU);
-	// pseudoheader for checksum
-	struct pseudoUDPHeader psh;
-	// ip header
-	struct ip *iph = (struct ip *) datagram;
-	// udp header - pointer after ip header (struct ip defined in <netinet/ip.h>)
-	struct udphdr  *udph = (struct udphdr *) (datagram + sizeof(struct ip));
-	// datapart pointer, after ip and udp header
-	char * dataPointer = datagram + (sizeof(struct ip) + sizeof(struct udphdr));
-
-	// bind our socket to interface and port
-	struct sockaddr_in interfaceSettings;
-	interfaceSettings.sin_family = AF_INET;
-	interfaceSettings.sin_addr = dhcpCoreInstance->getDeviceIP();
-	interfaceSettings.sin_port = htons(DHCP_CLIENT_PORT);
-	if (bind(senderSocket, (sockaddr*)&interfaceSettings, sizeof(interfaceSettings)) < 0)
-	{ // cannot bind socket to given address and port
-		fprintf(stderr, "Cannot bind socket to interface: %s.", chosenInterface.c_str());
-		printf("Oh dear, something went wrong with read()! %s\n", strerror(errno));
-		delete(dhcpCoreInstance);
-		exit(1);
-	}
-
-	// fill datagram with correct values
-	// ip header
-	iph->ip_hl = 5;
-	iph->ip_v = 4;
-	iph->ip_tos = 0;
-	iph->ip_len = sizeof(struct iphdr) + sizeof(struct udphdr); // no data for now
-	iph->ip_id = htonl(54321);							 //Id of this packet
-	iph->ip_off = 0;
-	iph->ip_ttl = 255;
-	iph->ip_p = IPPROTO_UDP;
-	iph->ip_sum = 0;								     //Set to 0 before calculating checksum
-	iph->ip_src = dhcpCoreInstance->getDeviceIP();       //TO-DO: Spoof the source ip address.
-	if ((inet_pton(AF_INET, DHCP_SERVER_ADDRESS, &(iph->ip_dst))) <= 0)
-	{
-		fprintf(stderr, "Cannot set server address (%s) -> inet_pton error.", DHCP_SERVER_ADDRESS);
-		delete(dhcpCoreInstance);
-		exit(1);
-	}
-	// udp header
-	udph->uh_sport = htons(DHCP_CLIENT_PORT);
-	udph->uh_dport = htons(DHCP_SERVER_PORT);
-	udph->uh_ulen = htons(sizeof(struct udphdr)); // no data for now
-	udph->uh_sum = 0;
-	// udp pseudoheader for checksum
-	psh.source_address = iph->ip_src.s_addr;
-	psh.dest_address = iph->ip_dst.s_addr;
-	psh.placeholder = 0;
-	psh.protocol = IPPROTO_UDP;
-	psh.udp_length = udph->uh_ulen;
-
-	// BEFORE SENDIND - create socket to catch response on Broadcast -------------------------------------------
-	int receiverSocket = 0;
-	if ((receiverSocket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-	{
-		fprintf(stderr, "Cannot create socket for receiving broadcast response.");
-		delete(dhcpCoreInstance);
-		exit(1);
-	}
-	int broadcast = 1;
-	if (setsockopt(receiverSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0)
-	{
-		fprintf(stderr, "Cannot set broadcast to socket.");
-		delete(dhcpCoreInstance);
-		exit(1);
-	}
-
-	struct sockaddr_in receivingAddress;
-	memset(&receivingAddress, 0, sizeof receivingAddress);
-	receivingAddress.sin_addr.s_addr = htonl(INADDR_ANY); // broadcast
-	receivingAddress.sin_family = AF_INET;
-	receivingAddress.sin_port = htons(DHCP_SERVER_PORT);
-
-	// connect socket
-	if (bind(receiverSocket, (struct sockaddr *)&receivingAddress, sizeof(receivingAddress)) < 0)
-	{
-		fprintf(stderr, "Cannot connect socket to address.");
+		fprintf(stderr, "Cannot set server address (%s) -> inet_pton error.\n", DHCP_SERVER_ADDRESS);
 		delete(dhcpCoreInstance);
 		exit(1);
 	}
@@ -241,13 +167,13 @@ int main(int argc, char* argv[])
 		}
 
 		// send message
-		send(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0);
+		sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&serverSettings, sizeof(serverSettings));
+		fprintf(stdout, "Packet send.\n");
 
 		// get the response -> is blocking if no response, the code will get stack
 		// TO-DO: Check what happend if pool is dried out
 		//int receivedSize = recvfrom(receiverSocket, response, ETHERNET_MTU, 0, (sockaddr *)&si_other, &slen);
-		int receivedSize = recvfrom(receiverSocket, response, ETHERNET_MTU, 0, (sockaddr *)&si_other, &slen);
-		printf("recv: %d | %s\n", receivedSize, response);
+		int receivedSize = recvfrom(senderSocket, response, ETHERNET_MTU, 0, (sockaddr *)&si_other, &slen);
 		struct sockaddr_in *s = (struct sockaddr_in *)&si_other;
 		int port = ntohs(s->sin_port);
 		char ipstr[INET_ADDRSTRLEN];
@@ -262,14 +188,16 @@ int main(int argc, char* argv[])
 			delete(dhcpCoreInstance);
 			exit(1);
 		}
+		else
+		{
+			// send DHCP request
+		}
+		// wait for DHCPACK
 
 		i++;
 	}
 	// free the array for response
 	delete(response);
-
-	/*int readedBytes = recv(receiverSocket, &response, sizeof(response) - 1200, 0);
-	std::cout << "Readed Bytes: " << readedBytes << std::endl;*/
 
 	delete(dhcpCoreInstance);
 	exit(0);

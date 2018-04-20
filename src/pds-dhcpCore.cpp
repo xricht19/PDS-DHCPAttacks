@@ -129,8 +129,14 @@ void DHCPCore::ProcessDHCPOfferMessage(char* message, int messageLength)
 	fprintf(stdout, "xid: 0x%08X\n", _dhcpMessage->xid);
 	fprintf(stdout, "secs: %d\n", _dhcpMessage->secs);
 	fprintf(stdout, "flags: %d\n", _dhcpMessage->flags);
+	
+	
 }
 
+void DHCPCore::createDHCPOfferMessage()
+{
+	
+}
 
 void DHCPCore::getDeviceIPAddressNetMask(std::string deviceName)
 {
