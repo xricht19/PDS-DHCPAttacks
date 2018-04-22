@@ -60,14 +60,8 @@ void RawSocketHelper::FillIPHeader(sockaddr_in * srcIP, sockaddr_in * destIP)
     _ipHeader->ip_ttl = 255;
     _ipHeader->ip_p = IPPROTO_UDP;
     _ipHeader->ip_sum = 0;								     //Set to 0 before calculating checksum
-    _ipHeader->ip_src = srcIp;       //TO-DO: Spoof the source ip address.
-    if ((inet_pton(AF_INET, DHCP_SERVER_ADDRESS, &(iph->ip_dst))) <= 0)
-    {
-        fprintf(stderr, "Cannot set server address (%s) -> inet_pton error.", DHCP_SERVER_ADDRESS);
-        delete(dhcpCoreInstance);
-        exit(1);
-    }
-    _ipHeader->ip_dst
+    _ipHeader->ip_src = srcIP->sin_addr;       //TO-DO: Spoof the source ip address.
+	_ipHeader->ip_dst = destIP->sin_addr;
 }
 
 bool RawSocketHelper::isErrorOccure()
