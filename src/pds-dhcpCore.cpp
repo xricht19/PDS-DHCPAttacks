@@ -1,8 +1,8 @@
 #include "include/pds-dhcpCore.h"
 
 
-
-DHCPCore::DHCPCore() : _dhcpMessage(nullptr), _dhcp_xid(0)
+DHCPCore::DHCPCore() : _dhcpMessage(nullptr), _dhcpMessageResponse(nullptr), _dhcp_xid(0),
+	_dhcpMessageResponseLength(0), _state(0)
 {
 	// init random generator
 	srand(time(nullptr));
@@ -21,6 +21,10 @@ void DHCPCore::cleanDHCPCore()
 		// TO-DO: THE DELETION OF SOME INNER PART MAY BE NEEDED.
 		delete(_dhcpMessage);
 	}
+	if (_dhcpMessageResponse != nullptr)
+	{
+		delete(_dhcpMessageResponse);
+	}
 }
 
 void DHCPCore::initDHCPCore()
@@ -31,7 +35,13 @@ void DHCPCore::initDHCPCore()
 		// TO-DO: THE DELETION OF SOME INNER PART MAY BE NEEDED.
 		delete(_dhcpMessage);
 	}
+	if (_dhcpMessageResponse != nullptr)
+	{
+		delete(_dhcpMessageResponse);
+	}
+
 	_dhcpMessage = new dhcp_packet();
+	_dhcpMessageResponse = new dhcp_packet();
 }
 
 char* DHCPCore::getMessage()
@@ -104,10 +114,20 @@ void DHCPCore::createDHCPDiscoverMessage()
 	/* DHCP message type is embedded in options field */
 	_dhcpMessage->options[4] = 53;					/* DHCP message type option identifier */
 	_dhcpMessage->options[5] = '\x01';              /* DHCP message option length in bytes */
-	_dhcpMessage->options[6] = 1;
+	_dhcpMessage->options[6] = DHCP_TYPE_DISCOVER;
 
 	// end option
 	_dhcpMessage->options[7] = 255;					/* DHCP message end of options */
+
+	_state = DHCP_TYPE_DISCOVER;
+
+	/*fprintf(stdout, "Op: %d\n", _dhcpMessage->op);
+	fprintf(stdout, "Type: %d\n", _dhcpMessage->htype);
+	fprintf(stdout, "hlen: %d\n", _dhcpMessage->hlen);
+	fprintf(stdout, "hops: %d\n", _dhcpMessage->hops);
+	fprintf(stdout, "xid: 0x%08X\n", _dhcpMessage->xid);
+	fprintf(stdout, "secs: %d\n", _dhcpMessage->secs);
+	fprintf(stdout, "flags: %d\n", _dhcpMessage->flags);*/
 }
 
 void DHCPCore::ProcessDHCPOfferMessage(char* message, int messageLength)
@@ -117,26 +137,80 @@ void DHCPCore::ProcessDHCPOfferMessage(char* message, int messageLength)
 		_errorType = NON_VALID_MESSAGE;
 		return;
 	}
-
 	// init dhcp class and fill it with message
-	initDHCPCore();
-	std::memcpy(_dhcpMessage, message, messageLength * sizeof(char));
+	std::memset(_dhcpMessageResponse, 0, sizeof(dhcp_packet));
+	std::memcpy(_dhcpMessageResponse, message, messageLength * sizeof(char));
+	_dhcpMessageResponseLength = messageLength;
 
-	fprintf(stdout, "Op: %d\n", _dhcpMessage->op);
-	fprintf(stdout, "Type: %d\n", _dhcpMessage->htype);
-	fprintf(stdout, "hlen: %d\n", _dhcpMessage->hlen);
-	fprintf(stdout, "hops: %d\n", _dhcpMessage->hops);
-	fprintf(stdout, "xid: 0x%08X\n", _dhcpMessage->xid);
-	fprintf(stdout, "secs: %d\n", _dhcpMessage->secs);
-	fprintf(stdout, "flags: %d\n", _dhcpMessage->flags);
-	
-	
+	uint32_t dhcpType = 0;
+	getOptionValue(53, dhcpType);
+	if(dhcpType == DHCP_TYPE_OFFER)
+	{
+		createDHCPRequestMessage();
+	}
+	else
+	{
+		// unexpected message type
+		fprintf(stderr, "Unexpected dhcp message type: %d\n", dhcpType);
+	}
 }
 
 void DHCPCore::createDHCPOfferMessage()
 {
-	
+
 }
+
+void DHCPCore::createDHCPRequestMessage()
+{
+	// edit _dhcpMessage to request
+	std::memset(&_dhcpMessage->options, 0, sizeof(_dhcpMessage->options));
+	// set options
+	// first four bytes of options field is magic cookie (as per RFC 2132) 
+	_dhcpMessage->options[0] = '\x63';
+	_dhcpMessage->options[1] = '\x82';
+	_dhcpMessage->options[2] = '\x53';
+	_dhcpMessage->options[3] = '\x63';
+
+	// DHCP message type is embedded in options field 
+	_dhcpMessage->options[4] = 53;					/* DHCP message type option identifier */
+	_dhcpMessage->options[5] = '\x01';              /* DHCP message option length in bytes */
+	_dhcpMessage->options[6] = DHCP_TYPE_REQUEST;
+
+	// fill options for dhcp request
+	_dhcpMessage->options[7] = 50;
+	_dhcpMessage->options[8] = '\x04';
+	std::memcpy(&_dhcpMessage->options[9], &_dhcpMessageResponse->yiaddr.s_addr, 4);
+
+	// end option
+	_dhcpMessage->options[13] = 255;					/* DHCP message end of options */
+
+	_state = DHCP_TYPE_REQUEST;
+}
+
+void DHCPCore::ProcessDHCPAckMessage(char* message, int messageLength)
+{
+	if (messageLength <= 0)
+	{
+		_errorType = NON_VALID_MESSAGE;
+		return;
+	}
+	// init dhcp class and fill it with message
+	std::memset(_dhcpMessageResponse, 0, sizeof(dhcp_packet));
+	std::memcpy(_dhcpMessageResponse, message, messageLength * sizeof(char));
+	// check if it is correct message
+	uint32_t dhcpType = 0;
+	getOptionValue(53, dhcpType);
+	if(dhcpType == DHCP_TYPE_ACK)
+	{ 	// finish
+		_state = DHCP_TYPE_ACK;
+	}
+	else
+	{
+		// unexpected message type
+		fprintf(stderr, "Unexpected dhcp message type: %d\n", dhcpType);
+	}
+}
+
 
 void DHCPCore::getDeviceIPAddressNetMask(std::string deviceName)
 {
@@ -211,10 +285,64 @@ void DHCPCore::printDHCPCoreError() const
 		fprintf(stderr, "Cannot get IP Address of given device!\n");
 		break;
 	case ERROROPTIONS::NON_VALID_MESSAGE:
-		fprintf(stderr, "Message received as answer is not valid!\n");
+		fprintf(stderr, "Message received but is not valid!\n");
+		break;
+	case INCORRECT_XID:
+		fprintf(stderr, "Message has invalid xid!\n");
 		break;
 	default:
 		fprintf(stderr, "Something happened! Sadly, I cannot continue.");
 	}
 }
 
+int DHCPCore::getCurrentXID()
+{
+	return _dhcpMessage->xid;
+}
+
+void DHCPCore::getOptionValue(const int optionNumber, uint32_t &value)
+{
+	int currentOption = 0; 
+	uint8_t currentOptionSize = 0;
+	int position = 4; // skip magic cookies
+	unsigned char* options = _dhcpMessageResponse->options;
+	while(currentOption != 255)
+	{
+		currentOption = options[position];
+		currentOptionSize = options[++position];
+		//fprintf(stdout, "Founded options and size: %d | %d\n", currentOption, currentOptionSize);
+		if(currentOption == optionNumber)
+		{
+			if(currentOptionSize > 4)
+			{
+				fprintf(stderr, "Too large option, cannot process!\n");
+				return;
+			}
+			for(auto i = 0; i < currentOptionSize; ++i)
+			{
+				int partVal = options[position+1+i];
+				value = (partVal << (8*i));
+			}
+			return;
+		}
+		else
+		{
+			position += currentOptionSize;
+		}
+	}
+}
+
+int DHCPCore::getXID(char* message, int messageLength)
+{
+	uint32_t xid = 0;
+	/*if(messageLength > 0)
+	{
+		dhcp_packet* packet = new dhcp_packet();
+		std::memset(packet, 0, sizeof(dhcp_packet));
+		std::memcpy(packet, message, messageLength * sizeof(char));
+		xid = packet->xid; 
+		delete(packet);
+	}*/
+	std::memcpy(&xid, &message[4], 4);
+	return xid;
+}

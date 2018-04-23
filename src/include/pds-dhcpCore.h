@@ -26,6 +26,11 @@
 #define DHCPCORE_HTYPE 1
 #define DHCPCORE_HLEN 6
 #define DHCPCORE_HOPS 0
+#define DHCP_TYPE_DISCOVER 1
+#define DHCP_TYPE_OFFER 2
+#define DHCP_TYPE_REQUEST 3
+#define DHCP_TYPE_ACK 5
+#define DHCP_TYPE_NACK 6
 // DHCP Discover settings
 #define DHCPCORE_DISCOVER_OP 1 // BOOTREQUEST
 #define DHCPCORE_DISCOVER_CLIENT_IP "0.0.0.0"
@@ -44,39 +49,6 @@
 
 class DHCPCore
 {
-public:
-	DHCPCore();
-	~DHCPCore();
-
-	// DHCP messages
-	void createDHCPDiscoverMessage();
-	void createDHCPOfferMessage();
-	/*bool createDHCPRequestMessage();
-	bool createDHCPPackMessage();*/
-
-	//void waitForAndProcessDHCPDiscover();
-	void ProcessDHCPOfferMessage(char* message, int messageLength);
-	/*void waitForAndProcessDHCPRequest();
-	void waitForAndProcessDHCPAck();
-	*/
-
-	// get device IP address
-	void getDeviceIPAddressNetMask(std::string deviceName);
-
-	// function to print error
-	bool isError();
-	void printDHCPCoreError() const;
-
-	// clean everything from dhcpCore, end the end or after error
-	void cleanDHCPCore();
-	// init dhcp core class to be able to process new message
-	void initDHCPCore();
-
-	char* getMessage();
-	int getSizeOfMessage();
-
-	struct in_addr getDeviceIP() { struct in_addr ip = _deviceIP; return ip; }
-
 private:
 	// varible flag for errors
 	enum ERROROPTIONS
@@ -85,6 +57,7 @@ private:
 		INET_ATON_ERROR,
 		CANNOT_FIND_GIVEN_DEVICE_IP,
 		NON_VALID_MESSAGE,
+		INCORRECT_XID,
 	};
 	ERROROPTIONS _errorType;
 	// device info
@@ -116,10 +89,55 @@ private:
 
 	// dhcp packet which is worked on
 	struct dhcp_packet* _dhcpMessage;
+	struct dhcp_packet* _dhcpMessageResponse;
+	int _dhcpMessageResponseLength;
 	uint32_t _dhcp_xid;
+
+	int _state;
 
 	// spoofed MAC address generator
 	void genAndSetMACAddress();
+
+	
+public:
+	DHCPCore();
+	~DHCPCore();
+
+	// DHCP messages
+	void createDHCPDiscoverMessage();
+	void createDHCPOfferMessage();
+	void createDHCPRequestMessage();
+	void createDHCPAckMessage();
+
+	void ProcessDHCPDiscoverMessage(char* message, int messageLength);
+	void ProcessDHCPOfferMessage(char* message, int messageLength);
+	void ProcessDHCPRequestMessage(char* message, int messageLength);
+	void ProcessDHCPAckMessage(char* message, int messageLength);
+	// get device IP address
+	void getDeviceIPAddressNetMask(std::string deviceName);
+
+	// function to print error
+	bool isError();
+	void printDHCPCoreError() const;
+
+	// clean everything from dhcpCore, end the end or after error
+	void cleanDHCPCore();
+	// init dhcp core class to be able to process new message
+	void initDHCPCore();
+
+	char* getMessage();
+	int getSizeOfMessage();
+
+	struct in_addr getDeviceIP() { struct in_addr ip = _deviceIP; return ip; }
+
+	int getCurrentXID();
+
+	void getOptionValue(const int optionNumber, uint32_t &value);
+
+	void setState(int value) { _state = value; }
+	int getState() { return _state; }
+
+	static int getXID(char* message, int messageLength);
 };
 
 

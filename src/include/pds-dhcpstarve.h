@@ -9,6 +9,9 @@
 #include <string>
 #include <stdint.h>
 
+#include <mutex>
+#include <chrono>
+#include <thread>
 #include <iostream>
 
 // general DHCP settings
@@ -18,10 +21,14 @@
 #define DHCP_CLIENT_ADDRESS "255.255.255.255"
 #define ETHERNET_MTU 1500
 
+// times constant
+#define WAIT_BEFORE_CHECK_SOCKET_AGAIN 100	// 0.1 sec
+#define WAIT_FOR_RESPONSE_TIME 30000			// 30 sec
+
+
 enum ERR_CODES {
 	OK = 0,
 	INCORRECT_PARAMS,
-
 };
 
 
