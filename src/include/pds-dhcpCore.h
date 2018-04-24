@@ -92,6 +92,7 @@ private:
 	struct dhcp_packet* _dhcpMessageResponse;
 	int _dhcpMessageResponseLength;
 	uint32_t _dhcp_xid;
+	uint32_t _offeredIPAddress;	// set in little endian
 
 	int _state;
 
@@ -100,7 +101,7 @@ private:
 
 	
 public:
-	DHCPCore();
+	DHCPCore(int threadNumber);
 	~DHCPCore();
 
 	// DHCP messages
@@ -130,8 +131,10 @@ public:
 
 	struct in_addr getDeviceIP() { struct in_addr ip = _deviceIP; return ip; }
 
-	int getCurrentXID();
+	uint32_t getCurrentXID();
+	uint32_t getOfferedIPAddress() { return _offeredIPAddress; }
 
+	// returns the value of given option number from response, work only if value can be stored in uint32_t (max 4 octets)
 	void getOptionValue(const int optionNumber, uint32_t &value);
 
 	void setState(int value) { _state = value; }

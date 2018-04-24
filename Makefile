@@ -2,7 +2,7 @@ DHCPSTARVENAME=pds-dhcpstarve
 SDIR=src
 IDIR =src/include
 CC=g++
-CFLAGS=-std=c++11 -I$(IDIR)
+CFLAGS=-std=c++11 -I$(IDIR) -pthread
 
 ODIR=build
 LDIR =../lib

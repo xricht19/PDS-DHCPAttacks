@@ -1,11 +1,11 @@
 #include "include/pds-dhcpCore.h"
 
 
-DHCPCore::DHCPCore() : _dhcpMessage(nullptr), _dhcpMessageResponse(nullptr), _dhcp_xid(0),
-	_dhcpMessageResponseLength(0), _state(0)
+DHCPCore::DHCPCore(int threadNumber) : _dhcpMessage(nullptr), _dhcpMessageResponse(nullptr), _dhcp_xid(0),
+	_dhcpMessageResponseLength(0), _state(0), _offeredIPAddress(0)
 {
 	// init random generator
-	srand(time(nullptr));
+	srand(time(nullptr) * threadNumber);
 }
 
 DHCPCore::~DHCPCore()
@@ -42,6 +42,8 @@ void DHCPCore::initDHCPCore()
 
 	_dhcpMessage = new dhcp_packet();
 	_dhcpMessageResponse = new dhcp_packet();
+
+	_errorType = ERROROPTIONS::OK;
 }
 
 char* DHCPCore::getMessage()
@@ -151,7 +153,7 @@ void DHCPCore::ProcessDHCPOfferMessage(char* message, int messageLength)
 	else
 	{
 		// unexpected message type
-		fprintf(stderr, "Unexpected dhcp message type: %d\n", dhcpType);
+		fprintf(stderr, "Unexpected dhcp message type: %d. Waiting for DHCPOffer.\n", dhcpType);
 	}
 }
 
@@ -180,9 +182,24 @@ void DHCPCore::createDHCPRequestMessage()
 	_dhcpMessage->options[7] = 50;
 	_dhcpMessage->options[8] = '\x04';
 	std::memcpy(&_dhcpMessage->options[9], &_dhcpMessageResponse->yiaddr.s_addr, 4);
+	// save ip we are requesting
+	_offeredIPAddress = _dhcpMessageResponse->yiaddr.s_addr;
 
-	// end option
-	_dhcpMessage->options[13] = 255;					/* DHCP message end of options */
+	uint32_t serverIdentifier = 0;
+	getOptionValue(54, serverIdentifier);
+	if(serverIdentifier != 0)
+	{
+		_dhcpMessage->options[13] = 54;
+		_dhcpMessage->options[14] = '\x04';
+		std::memcpy(&_dhcpMessage->options[15], &serverIdentifier, 4);
+		// end option
+		_dhcpMessage->options[19] = 255;
+	}
+	else
+	{
+		// end option
+		_dhcpMessage->options[13] = 255;					/* DHCP message end of options */
+	}
 
 	_state = DHCP_TYPE_REQUEST;
 }
@@ -291,11 +308,11 @@ void DHCPCore::printDHCPCoreError() const
 		fprintf(stderr, "Message has invalid xid!\n");
 		break;
 	default:
-		fprintf(stderr, "Something happened! Sadly, I cannot continue.");
+		fprintf(stderr, "Something happened! Sadly, I cannot continue. ErrorCode: %d\n", _errorType);
 	}
 }
 
-int DHCPCore::getCurrentXID()
+uint32_t DHCPCore::getCurrentXID()
 {
 	return _dhcpMessage->xid;
 }
@@ -308,8 +325,8 @@ void DHCPCore::getOptionValue(const int optionNumber, uint32_t &value)
 	unsigned char* options = _dhcpMessageResponse->options;
 	while(currentOption != 255)
 	{
-		currentOption = options[position];
-		currentOptionSize = options[++position];
+		currentOption = options[position++];
+		currentOptionSize = options[position++];
 		//fprintf(stdout, "Founded options and size: %d | %d\n", currentOption, currentOptionSize);
 		if(currentOption == optionNumber)
 		{
@@ -320,8 +337,8 @@ void DHCPCore::getOptionValue(const int optionNumber, uint32_t &value)
 			}
 			for(auto i = 0; i < currentOptionSize; ++i)
 			{
-				int partVal = options[position+1+i];
-				value = (partVal << (8*i));
+				uint32_t partVal = options[position+i];
+				value = value | (partVal << (8*i));
 			}
 			return;
 		}

