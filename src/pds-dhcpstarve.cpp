@@ -265,7 +265,7 @@ int main(int argc, char* argv[])
 	
 	// set parameters for server address and connect socket to it
 	struct sockaddr_in serverSettings;
-	memset(&serverSettings, 0, sizeof serverSettings);
+	memset(&serverSettings, 0, sizeof(serverSettings));
 	serverSettings.sin_family = AF_INET;
 	serverSettings.sin_port = htons(DHCP_SERVER_PORT);
 	// set IPv4 broadcast
@@ -289,7 +289,7 @@ int main(int argc, char* argv[])
 		{
 			std::thread(dhcpStarveClient, senderSocket, std::ref(serverSettings), ++threadNumber).detach();
 		}
-		// sleep for two seconds
+		// sleep for one second, before trying to create more threads
 		std::this_thread::sleep_for(std::chrono::seconds(1));
 	}
 
