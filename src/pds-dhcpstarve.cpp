@@ -51,13 +51,13 @@ void addToMaxThreadCount(int value)
 }
 
 
-int sendMessage(int socket, char* message, int messageLength, sockaddr* serverSettings)
+int sendMessage(int socket, unsigned char* message, int messageLength, sockaddr* serverSettings)
 {
 	std::lock_guard<std::mutex> guard(socketMutex);
 	sendto(socket, message, messageLength, 0, serverSettings, sizeof(sockaddr));
 }
 
-int tryGetMessage(int socket, char* message, int &messageLength, uint32_t xid)
+int tryGetMessage(int socket, unsigned char* message, int &messageLength, uint32_t xid)
 {
 	std::lock_guard<std::mutex> guard(socketMutex);
 
@@ -95,7 +95,7 @@ void dhcpStarveClient(int socket, struct sockaddr_in &serverSettings, int thread
 	auto timeStart = std::chrono::high_resolution_clock::now();
 	// get the response -> is blocking if no response, the code will get stack
 	// TO-DO: Check what happend if pool is dried out
-	char message[ETHERNET_MTU];
+	unsigned char message[ETHERNET_MTU];
 	int messageLength = ETHERNET_MTU;
 	// wait for DHCPOFFER	
 	while(true)
@@ -109,7 +109,7 @@ void dhcpStarveClient(int socket, struct sockaddr_in &serverSettings, int thread
 			return;
 		}
 		std::memset(&message, 0, sizeof(message));
-		int forMe = tryGetMessage(socket, &message[0], messageLength, dhcpCoreInstance->getCurrentXID());
+		int forMe = tryGetMessage(socket, message, messageLength, dhcpCoreInstance->getCurrentXID());
 		if(forMe)
 		{
 			if(dhcpCoreInstance->getState() == DHCP_TYPE_DISCOVER)

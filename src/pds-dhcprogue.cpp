@@ -3,6 +3,8 @@
 // global variables
 int volatile sigIntCatched = false;
 
+#ifndef SERVER_SETTINGS_STRUCT
+#define SERVER_SETTINGS_STRUCT 
 struct serverSettings
 {
 	std::string interfaceName = "";
@@ -11,16 +13,28 @@ struct serverSettings
 	struct in_addr gateway;
 	struct in_addr dnsServer;
 	std::string domain;
-	int leaseTime = -1;
+	uint32_t leaseTime;
+	struct in_addr serverIdentifier;
 };
-
+#endif
 struct addressPool
 {
 	struct in_addr ipAddress;
 	unsigned char chaddr[CHADDR_LENGTH];
-	uint32_t leaseTime;
+	uint32_t leaseTime;					// if set to 0 and !isFree, do not free this address, it's blocked by decline
 	std::chrono::time_point<std::chrono::system_clock, std::chrono::system_clock::duration> timeOfRent;
 	bool isFree;
+};
+
+class negotiatedClient
+{
+public:
+	negotiatedClient(unsigned char* addr, uint32_t xidIn, int addrLength = CHADDR_LENGTH) : 
+		chaddr(addr), xid(xidIn), chaddrLength(addrLength){}
+
+	int chaddrLength;
+	unsigned char* chaddr;
+	uint32_t xid;
 };
 
 int setPoolInfo(struct serverSettings &serverSet, std::string pool)
@@ -44,6 +58,30 @@ int setPoolInfo(struct serverSettings &serverSet, std::string pool)
 		return -1;
 	}
 	return 0;
+}
+
+in_addr GetFreeIPAddressToOffer(std::vector<addressPool*> &addrPool)
+{
+	struct in_addr chosenAddr;
+	chosenAddr.s_addr = 0;
+	for(std::vector<addressPool*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
+	{
+		if((*it)->isFree)
+		{
+			(*it)->isFree = false;
+			(*it)->leaseTime = BLOCK_ADDRESS_AFTER_DISCOVER_TIME;
+			(*it)->timeOfRent = std::chrono::system_clock::now();
+			chosenAddr = (*it)->ipAddress;
+			break;
+		}
+	}
+	return chosenAddr;
+}
+
+
+void preProcessDHCPRequest(unsigned char* message, int messageLength, std::vector<negotiatedClient*> &dealInProgress)
+{
+	fprintf(stdout, "preProcessing DHCPRequest.\n");
 }
 
 
@@ -113,7 +151,8 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "Incorrect params, exiting program.\n");
 		return INCORRECT_PARAMS;
 	}	
-	// fill server settings from parameters strings
+	// fill server settings from parameters strings -----------------------------------------------------------
+	// struct serverSettings + address pool
 	struct serverSettings serverSet;
 	serverSet.interfaceName = chosenInterface;
 	if(setPoolInfo(serverSet, pool) < 0) {
@@ -129,10 +168,27 @@ int main(int argc, char* argv[])
 		return INET_PTON_ERROR;
 	}
 	serverSet.domain = domain;
-	serverSet.leaseTime = std::stoi(leaseTime);
+	serverSet.leaseTime = static_cast<uint32_t>(std::stoi(leaseTime));
 	if(serverSet.leaseTime < 0) {
 		fprintf(stderr, "Cannot convert string:(%s) to int -> std::stoi error.\n", leaseTime.c_str());
 		return INCORRECT_PARAMS;
+	}
+	// fill server identifier
+	serverSet.serverIdentifier = DHCPCore::getDeviceIP(chosenInterface);
+	// prepare free addresses structure
+	uint32_t addrCount = ntohl(serverSet.poolLast.s_addr) - ntohl(serverSet.poolFirst.s_addr) + 1;
+	// address pool
+	std::vector<addressPool*> addrPool;
+	// fill address pool
+	for(uint32_t i = 0; i < addrCount; ++i)
+	{
+		struct addressPool *temp = new addressPool();
+		temp->ipAddress.s_addr = serverSet.poolFirst.s_addr + htonl(i);
+		std::memset(&temp->chaddr, 0, CHADDR_LENGTH);
+		temp->leaseTime = 0;
+		temp->timeOfRent = std::chrono::system_clock::now();
+		temp->isFree = true;
+		addrPool.push_back(temp);
 	}
 
 	// --------------------------- CREATE SOCKET FOR COMMUNICATION --------------------------------------
@@ -186,21 +242,6 @@ int main(int argc, char* argv[])
 		exit(1);
 	}
 
-	// prepare free addresses structure
-	uint32_t addrCount = ntohl(serverSet.poolLast.s_addr) - ntohl(serverSet.poolFirst.s_addr) + 1;
-	//fprintf(stderr, "Free addresses: %d\n", addrCount);
-	std::vector<addressPool*> addrPool;
-	for(uint32_t i = 0; i < addrCount; ++i)
-	{
-		struct addressPool *temp = new addressPool();
-		temp->ipAddress.s_addr = serverSet.poolFirst.s_addr + htonl(i);
-		std::memset(&temp->chaddr, 0, CHADDR_LENGTH);
-		temp->leaseTime = 0;
-		temp->timeOfRent = std::chrono::system_clock::now();
-		temp->isFree = true;
-		addrPool.push_back(temp);
-	}
-
 	/*for(std::vector<addressPool*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
 	{
 		fprintf(stdout, "Address: %s\n", inet_ntoa((*it)->ipAddress));
@@ -214,8 +255,11 @@ int main(int argc, char* argv[])
 	sockaddr_in si_other;
 	unsigned slen = sizeof(sockaddr);
 	uint8_t type = 0;
-	char message[ETHERNET_MTU];
+	unsigned char message[ETHERNET_MTU];
 	int messageLength = ETHERNET_MTU;
+	// deal in process
+	std::vector<negotiatedClient*> dealInProgress;
+
 	// start process messages from clients
 	while(true)
 	{		
@@ -224,20 +268,90 @@ int main(int argc, char* argv[])
 			break;
 		}
 		std::memset(&message, 0, sizeof(message));
-		int receivedSize = recvfrom(senderSocket, message, messageLength, MSG_DONTWAIT, (sockaddr *)&si_other, &slen);
+		int receivedSize = recvfrom(senderSocket, &message[0], messageLength, MSG_DONTWAIT, (sockaddr *)&si_other, &slen);
 		if(receivedSize > 0)
 		{
-			fprintf(stdout, "Some message obtained. Length: %d\n", receivedSize);
 			// check if DHCP
-
+			if(!DHCPCore::IsDHCPMessage(message, receivedSize))
+			{
+				fprintf(stderr, "No DHCP message on port 67! Length: %d\n", receivedSize);
+				break;
+			}
 			// get DHCP type
+			int type = DHCPCore::GetDHCPMessageType(message, receivedSize);
+			if(type == -1)
+			{
+				fprintf(stderr, "Cannot find DHCP message type in packet!\n");
+				break;
+			}
+			std::cout << "Type: " << type << std::endl;
+			bool success = true;
+			// switch dhcp types and generate response
+			switch(type)
+			{
+				case DHCP_TYPE_DISCOVER:
+					{
+						// create DHCP core class
+						DHCPCore* dhcpCoreInstance = new DHCPCore(1);
+						dhcpCoreInstance->ProcessDHCPDiscoverMessage(message, receivedSize);
+						in_addr ipAddrTemp = GetFreeIPAddressToOffer(addrPool);
+						// is not free address, send DHCPNack
+						if(ipAddrTemp.s_addr == 0)
+						{
+							dhcpCoreInstance->createDHCPNAckMessage();
+						}
+						// send DHCPOffer
+						else
+						{
+							dhcpCoreInstance->createDHCPOfferMessage(ipAddrTemp, serverSet);
+							if(dhcpCoreInstance->isError())
+							{
+								fprintf(stderr, "DHCP_TYPE_DISCOVER -> Error in create DHCPOfferMessage!\n");
+								success = false;
+								break;
+							}
+							// save the xid and MAC identifier to dealInProgress
+							unsigned char macAddr[CHADDR_LENGTH];
+							dhcpCoreInstance->GetCurrentClientMacAddr(&macAddr[0], CHADDR_LENGTH);
+							negotiatedClient* item = new negotiatedClient(macAddr, dhcpCoreInstance->getCurrentXID());
+							dealInProgress.push_back(item);
+							// send message
+						}
+						sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&clientSettings, sizeof(sockaddr));
+						delete(dhcpCoreInstance);
+					}
+					break;
+				case DHCP_TYPE_REQUEST:
+					preProcessDHCPRequest(message, receivedSize, dealInProgress);
+					// check if MAC and xid combination is known, if not, check if the mac address and ip is already assigned, extend lease time
+					// process dhcp request
 
+					// save response to client by broadcast
+					break;
+				case DHCP_TYPE_DECLINE:
+					// client refuse, because somebody is using this message, no answer only mark IP not to use
+					break;
+				case DHCP_TYPE_RELEASE:
+					// check if server id is yours and release address
+					break;
+				case DHCP_TYPE_INFORM:
+					// send response by direct message!
+					// send DHCPAck response with all info
+					break;
+			}
+			if(!success)
+				break;
 		}
-
+		// check if lease time of some addresses do not end, set them free if yes
 	}
 
 
 	// ---------------------------------------- CLEAN -----------------------------------------------------
+	for(std::vector<negotiatedClient*>::iterator it = dealInProgress.begin(); it!=dealInProgress.end(); ++it)
+	{
+		delete(*it);
+	}
+	dealInProgress.clear();
 	// close socket
 	close(senderSocket);
 	// delete address pool

@@ -22,21 +22,49 @@
 // DHCP Message settings
 #define DHCPCORE_CHADDR_LENGTH 16
 #define DHCPCORE_BROADCAST_FLAG 32768
-#define DHCPCORE_OPTION_LENGTH 1220 //bytes -> MTU(=1500) - (DHCPLength(=236) + HEADERS(42))
+#define MIN_DHCP_PACKET_SIZE 300
+#define MAX_DHCP_PACKET_SIZE 576
+#define DHCPCORE_OPTION_LENGTH 298 //bytes -> MAX_DHCP_PACKET_SIZE(=576) - (DHCPHeaderLength(=236) + Other HEADERS(42))
 #define DHCPCORE_HTYPE 1
 #define DHCPCORE_HLEN 6
 #define DHCPCORE_HOPS 0
-#define DHCP_TYPE_DISCOVER 1
-#define DHCP_TYPE_OFFER 2
-#define DHCP_TYPE_REQUEST 3
-#define DHCP_TYPE_ACK 5
-#define DHCP_TYPE_NACK 6
+
+#ifndef DHCP_MSG_TYPES
+	#define DHCP_MSG_TYPES
+	#define DHCP_TYPE_DISCOVER 1
+	#define DHCP_TYPE_OFFER 2
+	#define DHCP_TYPE_REQUEST 3
+	#define DHCP_TYPE_DECLINE 4
+	#define DHCP_TYPE_ACK 5
+	#define DHCP_TYPE_NACK 6
+	#define DHCP_TYPE_RELEASE 7
+	#define DHCP_TYPE_INFORM 8
+#endif
 // DHCP Discover settings
 #define DHCPCORE_DISCOVER_OP 1 // BOOTREQUEST
 #define DHCPCORE_DISCOVER_CLIENT_IP "0.0.0.0"
 #define DHCPCORE_DISCOVER_YOUR_IP "0.0.0.0"
 #define DHCPCORE_DISCOVER_SERVER_IP "0.0.0.0"
 #define DHCPCORE_DISCOVER_GATEWAY_IP "0.0.0.0"
+
+// DHCP Offer settings
+#define DHCPCORE_OFFER_OP 2 // BOOTREPLY
+#define DHCPCORE_OFFER_CLIENT_IP "0.0.0.0"
+
+#ifndef SERVER_SETTINGS_STRUCT
+#define SERVER_SETTINGS_STRUCT 
+struct serverSettings
+{
+	std::string interfaceName = "";
+	struct in_addr poolFirst;
+	struct in_addr poolLast;
+	struct in_addr gateway;
+	struct in_addr dnsServer;
+	std::string domain;
+	uint32_t leaseTime;
+	struct in_addr serverIdentifier;
+};
+#endif
 
 
 class DHCPCore
@@ -52,12 +80,6 @@ private:
 		INCORRECT_XID,
 	};
 	ERROROPTIONS _errorType;
-	// device info
-	struct ifaddrs _deviceInfo;
-	// device IP adress
-	struct in_addr _deviceIP;
-	// net mask
-	struct in_addr _netMask;
 
 	// dhcp packet format according to RFC2131, figure 1
 	struct dhcp_packet
@@ -87,6 +109,7 @@ private:
 	uint32_t _offeredIPAddress;	// set in little endian
 
 	int _state;
+	int _currentMessageSize;
 
 	// spoofed MAC address generator
 	void genAndSetMACAddress();
@@ -98,14 +121,15 @@ public:
 
 	// DHCP messages
 	void createDHCPDiscoverMessage();
-	void createDHCPOfferMessage();
+	void createDHCPOfferMessage(in_addr &ipAddrToOffer, serverSettings &serverSet);
 	void createDHCPRequestMessage();
-	void createDHCPAckMessage();
+	void createDHCPAckMessage(serverSettings* serverSet);
+	void createDHCPNAckMessage();
 
-	void ProcessDHCPDiscoverMessage(char* message, int messageLength);
-	void ProcessDHCPOfferMessage(char* message, int messageLength);
-	void ProcessDHCPRequestMessage(char* message, int messageLength);
-	void ProcessDHCPAckMessage(char* message, int messageLength);
+	void ProcessDHCPDiscoverMessage(unsigned char* message, int &messageLength);
+	void ProcessDHCPOfferMessage(unsigned char* message, int &messageLength);
+	void ProcessDHCPRequestMessage(unsigned char* message, int &messageLength);
+	void ProcessDHCPAckMessage(unsigned char* message, int &messageLength);
 	// get device IP address
 	void getDeviceIPAddressNetMask(std::string deviceName);
 
@@ -118,21 +142,32 @@ public:
 	// init dhcp core class to be able to process new message
 	void initDHCPCore();
 
-	char* getMessage();
+	unsigned char* getMessage();
 	int getSizeOfMessage();
-
-	struct in_addr getDeviceIP() { struct in_addr ip = _deviceIP; return ip; }
 
 	uint32_t getCurrentXID();
 	uint32_t getOfferedIPAddress() { return _offeredIPAddress; }
+
+	void GetCurrentClientMacAddr(unsigned char* macAddr, int length);
 
 	// returns the value of given option number from response, work only if value can be stored in uint32_t (max 4 octets)
 	void getOptionValue(const int optionNumber, uint32_t &value);
 
 	void setState(int value) { _state = value; }
 	int getState() { return _state; }
+	// return device ip according to given interface name
+	static in_addr getDeviceIP(std::string deviceName);
+	// check if message is DHCP, contain magic cookie as first value in options
+	static bool IsDHCPMessage(unsigned char* message, int &messageLength);
+	// check if it's DHCP and return its type, or -1 if not dhcp 
+	static int GetDHCPMessageType(unsigned char* message, int &messageLength);
+	// return xid form dhcp message packet
+	static int getXID(unsigned char* message, int &messageLength);
 
-	static int getXID(char* message, int messageLength);
+	static int DHCPHeaderSize() { return (4*sizeof(uint8_t) + sizeof(uint32_t) + 
+		2*sizeof(uint16_t) + 4*sizeof(in_addr) + 64 + 128 + DHCPCORE_CHADDR_LENGTH); }
+	static int MinDHCPPacketSize() { return (DHCPHeaderSize()+5); }
+	static int MaxDHCPPacketSize() { return MAX_DHCP_PACKET_SIZE; }
 };
 
 
