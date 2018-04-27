@@ -76,12 +76,12 @@ void DHCPCore::genAndSetMACAddress()
 
 void DHCPCore::GetCurrentClientMacAddr(unsigned char* macAddr, int length)
 {
-	if(_dhcpMessage == nullptr)
+	if(_dhcpMessageResponse == nullptr)
 	{
 		std::memset(macAddr, 0, length);
 		return;
 	}
-	std::memcpy(macAddr, _dhcpMessage->chaddr, length);
+	std::memcpy(macAddr, _dhcpMessageResponse->chaddr, length);
 }
 
 /**
@@ -151,9 +151,17 @@ void DHCPCore::createDHCPDiscoverMessage()
 
 void DHCPCore::ProcessDHCPDiscoverMessage(unsigned char* message, int &messageLength)
 {
+	if (messageLength <= 0 || DHCPCore::IsDHCPMessage(message, messageLength) == false)
+	{
+		_errorType = NON_VALID_MESSAGE;
+		return;
+	}
 	// load to client dhcp message
 	std::memset(_dhcpMessageResponse, 0, sizeof(dhcp_packet));
 	std::memcpy(_dhcpMessageResponse, message, messageLength);
+	_dhcpMessageResponseLength = messageLength;
+
+	_state = DHCP_TYPE_DISCOVER;
 }
 
 void DHCPCore::ProcessDHCPOfferMessage(unsigned char* message, int &messageLength)
@@ -172,6 +180,7 @@ void DHCPCore::ProcessDHCPOfferMessage(unsigned char* message, int &messageLengt
 	getOptionValue(53, dhcpType);
 	if(dhcpType == DHCP_TYPE_OFFER)
 	{
+		_state = DHCP_TYPE_OFFER;
 		createDHCPRequestMessage();
 	}
 	else
@@ -180,6 +189,46 @@ void DHCPCore::ProcessDHCPOfferMessage(unsigned char* message, int &messageLengt
 		fprintf(stderr, "Unexpected dhcp message type: %d. Waiting for DHCPOffer.\n", dhcpType);
 	}
 }
+
+void DHCPCore::ProcessDHCPDeclineMessage(unsigned char* message, int &messageLength)
+{
+	if (messageLength <= 0 || DHCPCore::IsDHCPMessage(message, messageLength) == false)
+	{
+		_errorType = NON_VALID_MESSAGE;
+		return;
+	}
+	// init dhcp class and fill it with message
+	std::memset(_dhcpMessageResponse, 0, sizeof(dhcp_packet));
+	std::memcpy(_dhcpMessageResponse, message, messageLength * sizeof(char));
+	_dhcpMessageResponseLength = messageLength;
+}
+
+void DHCPCore::ProcessDHCPReleaseMessage(unsigned char* message, int &messageLength)
+{
+	if (messageLength <= 0 || DHCPCore::IsDHCPMessage(message, messageLength) == false)
+	{
+		_errorType = NON_VALID_MESSAGE;
+		return;
+	}
+	// init dhcp class and fill it with message
+	std::memset(_dhcpMessageResponse, 0, sizeof(dhcp_packet));
+	std::memcpy(_dhcpMessageResponse, message, messageLength * sizeof(char));
+	_dhcpMessageResponseLength = messageLength;
+}
+
+void DHCPCore::ProcessDHCPInformMessage(unsigned char* message, int &messageLength)
+{
+	if (messageLength <= 0 || DHCPCore::IsDHCPMessage(message, messageLength) == false)
+	{
+		_errorType = NON_VALID_MESSAGE;
+		return;
+	}
+	// init dhcp class and fill it with message
+	std::memset(_dhcpMessageResponse, 0, sizeof(dhcp_packet));
+	std::memcpy(_dhcpMessageResponse, message, messageLength * sizeof(char));
+	_dhcpMessageResponseLength = messageLength;
+}
+
 
 void DHCPCore::createDHCPOfferMessage(in_addr &ipAddrToOffer, serverSettings &serverSet)
 {
@@ -228,12 +277,12 @@ void DHCPCore::createDHCPOfferMessage(in_addr &ipAddrToOffer, serverSettings &se
 	// lease time - must
 	_dhcpMessage->options[++optionPos] = 51;
 	_dhcpMessage->options[++optionPos] = 4;
-	std::memcpy(&_dhcpMessage->options[++optionPos], &serverSet.leaseTime, 4);
+	std::memcpy(&_dhcpMessage->options[++optionPos], &(serverSet.leaseTime), 4);
 	optionPos += 3;
 	// server identifier - must
-	_dhcpMessage->options[++optionPos] = 54;
+	_dhcpMessage->options[++optionPos] = DHCPCORE_OPT_SERVER_IDENTIFIER;
 	_dhcpMessage->options[++optionPos] = 4;
-	std::memcpy(&_dhcpMessage->options[++optionPos], &serverSet.serverIdentifier, 4);
+	std::memcpy(&_dhcpMessage->options[++optionPos], &(serverSet.serverIdentifier.s_addr), 4);
 	optionPos += 3;
 	// end option
 	_dhcpMessage->options[++optionPos] = 255;					/* DHCP message end of options */
@@ -242,6 +291,8 @@ void DHCPCore::createDHCPOfferMessage(in_addr &ipAddrToOffer, serverSettings &se
 	_currentMessageSize = DHCPCore::DHCPHeaderSize() + ++optionPos;
 	if(_currentMessageSize < MIN_DHCP_PACKET_SIZE)
 		_currentMessageSize = MIN_DHCP_PACKET_SIZE;
+
+	_state = DHCP_TYPE_OFFER;
 }
 
 void DHCPCore::createDHCPRequestMessage()
@@ -268,10 +319,10 @@ void DHCPCore::createDHCPRequestMessage()
 	_offeredIPAddress = _dhcpMessageResponse->yiaddr.s_addr;
 
 	uint32_t serverIdentifier = 0;
-	getOptionValue(54, serverIdentifier);
+	getOptionValue(DHCPCORE_OPT_SERVER_IDENTIFIER, serverIdentifier);
 	if(serverIdentifier != 0)
 	{
-		_dhcpMessage->options[13] = 54;
+		_dhcpMessage->options[13] = DHCPCORE_OPT_SERVER_IDENTIFIER;
 		_dhcpMessage->options[14] = '\x04';
 		std::memcpy(&_dhcpMessage->options[15], &serverIdentifier, 4);
 		// end option
@@ -282,6 +333,23 @@ void DHCPCore::createDHCPRequestMessage()
 		// end option
 		_dhcpMessage->options[13] = 255;					/* DHCP message end of options */
 	}
+
+	_state = DHCP_TYPE_REQUEST;
+}
+
+void DHCPCore::ProcessDHCPRequestMessage(unsigned char* message, int &messageLength) 
+{
+	//fprintf(stdout, "Processign DHCPRequest\n");
+
+	if (messageLength <= 0 || DHCPCore::IsDHCPMessage(message, messageLength) == false)
+	{
+		_errorType = NON_VALID_MESSAGE;
+		return;
+	}
+	// init dhcp class and fill it with message
+	std::memset(_dhcpMessageResponse, 0, sizeof(dhcp_packet));
+	std::memcpy(_dhcpMessageResponse, message, messageLength * sizeof(char));
+	_dhcpMessageResponseLength = messageLength;
 
 	_state = DHCP_TYPE_REQUEST;
 }
@@ -310,23 +378,123 @@ void DHCPCore::ProcessDHCPAckMessage(unsigned char* message, int &messageLength)
 	}
 }
 
-void DHCPCore::createDHCPAckMessage(serverSettings* serverSet)
+void DHCPCore::createDHCPAckMessage(in_addr &ipAddrToOffer, serverSettings &serverSet, bool broadCastBitSet)
 {
 	fprintf(stdout, "Creating DHCPAck message.\n");
+	// init message
+	std::memset(_dhcpMessage, 0, sizeof(dhcp_packet));
+	// set values
+	_dhcpMessage->op = DHCPCORE_ACK_OP;
+	_dhcpMessage->htype = DHCPCORE_HTYPE;
+	_dhcpMessage->hlen = DHCPCORE_HLEN;
+	_dhcpMessage->hops = DHCPCORE_HOPS;
+	// copy xid from discover
+	_dhcp_xid = _dhcpMessageResponse->xid;
+	_dhcpMessage->xid = _dhcp_xid;
+	_dhcpMessage->secs = 0;
+	if(broadCastBitSet)
+		_dhcpMessage->flags = htons(DHCPCORE_BROADCAST_FLAG); 
+	else
+		_dhcpMessage->flags = _dhcpMessageResponse->flags;
+	// convert IPv4 addresses in number and dots notation to byte notation -> inet_aton, 
+	// return 1 if succesfully created, 0 otherwise
+	// try set all ip addresses , if error occured, raise the flag and stop creating message
+	_dhcpMessage->ciaddr = _dhcpMessageResponse->ciaddr;
+	_dhcpMessage->yiaddr = ipAddrToOffer;
+	_dhcpMessage->siaddr = serverSet.gateway;
+	_dhcpMessage->giaddr = _dhcpMessageResponse->giaddr;
+	std::memcpy(&_dhcpMessage->chaddr, &_dhcpMessageResponse->chaddr, DHCPCORE_CHADDR_LENGTH);
+	// fill options for offer
+	int optionPos = 0;
+	// magic cookie - must
+	_dhcpMessage->options[optionPos] = '\x63';
+	_dhcpMessage->options[++optionPos] = '\x82';
+	_dhcpMessage->options[++optionPos] = '\x53';
+	_dhcpMessage->options[++optionPos] = '\x63';
+	/* DHCP message type is embedded in options field */
+	_dhcpMessage->options[++optionPos] = 53;					/* DHCP message type option identifier */
+	_dhcpMessage->options[++optionPos] = '\x01';              /* DHCP message option length in bytes */
+	_dhcpMessage->options[++optionPos] = DHCP_TYPE_ACK;
+	// dsn server
+	_dhcpMessage->options[++optionPos] = 6;
+	_dhcpMessage->options[++optionPos] = 4;
+	std::memcpy(&_dhcpMessage->options[++optionPos], &serverSet.dnsServer.s_addr, 4);
+	optionPos += 3;
+	// domain
+	_dhcpMessage->options[++optionPos] = 15;
+	_dhcpMessage->options[++optionPos] = serverSet.domain.size();
+	std::memcpy(&_dhcpMessage->options[++optionPos], serverSet.domain.c_str(), serverSet.domain.size());
+	optionPos += serverSet.domain.size()-1;
+	// lease time - must if request, must not if inform
+	if(_state == DHCP_TYPE_REQUEST)
+	{
+		_dhcpMessage->options[++optionPos] = 51;
+		_dhcpMessage->options[++optionPos] = 4;
+		std::memcpy(&_dhcpMessage->options[++optionPos], &serverSet.leaseTime, 4);
+		optionPos += 3;
+	}
+	// server identifier - must
+	_dhcpMessage->options[++optionPos] = DHCPCORE_OPT_SERVER_IDENTIFIER;
+	_dhcpMessage->options[++optionPos] = 4;
+	std::memcpy(&_dhcpMessage->options[++optionPos], &serverSet.serverIdentifier, 4);
+	optionPos += 3;
+	// end option
+	_dhcpMessage->options[++optionPos] = 255;					/* DHCP message end of options */
 
+	// optimize size to send
+	_currentMessageSize = DHCPCore::DHCPHeaderSize() + ++optionPos;
+	if(_currentMessageSize < MIN_DHCP_PACKET_SIZE)
+		_currentMessageSize = MIN_DHCP_PACKET_SIZE;
+
+	_state = DHCP_TYPE_ACK;
 }
 
-void DHCPCore::createDHCPNAckMessage()
+void DHCPCore::createDHCPNackMessage(serverSettings &serverSet, bool broadCastBitSet)
 {
 	fprintf(stdout, "Creating DHCPNack message.\n");
+	// init message
+	std::memset(_dhcpMessage, 0, sizeof(dhcp_packet));
+	// set values
+	_dhcpMessage->op = DHCPCORE_NACK_OP;
+	_dhcpMessage->htype = DHCPCORE_HTYPE;
+	_dhcpMessage->hlen = DHCPCORE_HLEN;
+	_dhcpMessage->hops = DHCPCORE_HOPS;
+	// copy xid from discover
+	_dhcp_xid = _dhcpMessageResponse->xid;
+	_dhcpMessage->xid = _dhcp_xid;
+	_dhcpMessage->secs = 0;
+	if(broadCastBitSet)
+		_dhcpMessage->flags = htons(DHCPCORE_BROADCAST_FLAG);
+	else
+		_dhcpMessage->flags = _dhcpMessageResponse->flags;
+	_dhcpMessage->giaddr = _dhcpMessageResponse->giaddr;
+	std::memcpy(&_dhcpMessage->chaddr, &_dhcpMessageResponse->chaddr, DHCPCORE_CHADDR_LENGTH);
+	// fill options for offer
+	int optionPos = 0;
+	// magic cookie - must
+	_dhcpMessage->options[optionPos] = '\x63';
+	_dhcpMessage->options[++optionPos] = '\x82';
+	_dhcpMessage->options[++optionPos] = '\x53';
+	_dhcpMessage->options[++optionPos] = '\x63';
+	/* DHCP message type is embedded in options field */
+	_dhcpMessage->options[++optionPos] = 53;					/* DHCP message type option identifier */
+	_dhcpMessage->options[++optionPos] = '\x01';              /* DHCP message option length in bytes */
+	_dhcpMessage->options[++optionPos] = DHCP_TYPE_NACK;
+	// server identifier - must
+	_dhcpMessage->options[++optionPos] = DHCPCORE_OPT_SERVER_IDENTIFIER;
+	_dhcpMessage->options[++optionPos] = 4;
+	std::memcpy(&_dhcpMessage->options[++optionPos], &serverSet.serverIdentifier, 4);
+	optionPos += 3;
+	// end option
+	_dhcpMessage->options[++optionPos] = 255;					/* DHCP message end of options */
+
+	// optimize size to send
+	_currentMessageSize = DHCPCore::DHCPHeaderSize() + ++optionPos;
+	if(_currentMessageSize < MIN_DHCP_PACKET_SIZE)
+		_currentMessageSize = MIN_DHCP_PACKET_SIZE;
+
+	_state = DHCP_TYPE_NACK;
 }
-
-
-void DHCPCore::getDeviceIPAddressNetMask(std::string deviceName)
-{
-	
-}
-
 
 /**
  * \brief Check if the error occured in dhcpCore. If the error really occur, the cleaning is performed and the instance cannot be used anymore.
@@ -363,8 +531,10 @@ void DHCPCore::printDHCPCoreError() const
 	}
 }
 
-uint32_t DHCPCore::getCurrentXID()
+uint32_t DHCPCore::getCurrentXID(bool fromResponse)
 {
+	if(fromResponse)
+		return _dhcpMessageResponse->xid;
 	return _dhcpMessage->xid;
 }
 

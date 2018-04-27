@@ -17,11 +17,11 @@ struct serverSettings
 	struct in_addr serverIdentifier;
 };
 #endif
-struct addressPool
+struct addressPoolItem
 {
 	struct in_addr ipAddress;
-	unsigned char chaddr[CHADDR_LENGTH];
-	uint32_t leaseTime;					// if set to 0 and !isFree, do not free this address, it's blocked by decline
+	unsigned char chaddr[DHCPCORE_CHADDR_LENGTH];
+	uint32_t leaseTime;		
 	std::chrono::time_point<std::chrono::system_clock, std::chrono::system_clock::duration> timeOfRent;
 	bool isFree;
 };
@@ -29,12 +29,16 @@ struct addressPool
 class negotiatedClient
 {
 public:
-	negotiatedClient(unsigned char* addr, uint32_t xidIn, int addrLength = CHADDR_LENGTH) : 
-		chaddr(addr), xid(xidIn), chaddrLength(addrLength){}
+	negotiatedClient(unsigned char* addr, uint32_t xidIn, addressPoolItem* addressPoolPointer, int addrLength = DHCPCORE_CHADDR_LENGTH) : 
+		xid(xidIn), addrOffered(addressPoolPointer), chaddrLength(addrLength)
+	{
+		std::memcpy(chaddr, addr, DHCPCORE_CHADDR_LENGTH);
+	}
 
 	int chaddrLength;
-	unsigned char* chaddr;
+	unsigned char chaddr[DHCPCORE_CHADDR_LENGTH];
 	uint32_t xid;
+	addressPoolItem* addrOffered;
 };
 
 int setPoolInfo(struct serverSettings &serverSet, std::string pool)
@@ -60,28 +64,241 @@ int setPoolInfo(struct serverSettings &serverSet, std::string pool)
 	return 0;
 }
 
-in_addr GetFreeIPAddressToOffer(std::vector<addressPool*> &addrPool)
+addressPoolItem* GetFreeIPAddressToOffer(std::vector<addressPoolItem*> &addrPool, uint32_t requestedIPAddress, unsigned char* chaddrClient)
 {
-	struct in_addr chosenAddr;
-	chosenAddr.s_addr = 0;
-	for(std::vector<addressPool*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
+	addressPoolItem* chosenAddr  = nullptr;
+	bool assigned = false;
+	for(std::vector<addressPoolItem*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
 	{
-		if((*it)->isFree)
+		// get first free address
+		if(!assigned && (*it)->isFree)
 		{
+			std::memcpy(&((*it)->chaddr)[0], chaddrClient, DHCPCORE_CHADDR_LENGTH);
 			(*it)->isFree = false;
 			(*it)->leaseTime = BLOCK_ADDRESS_AFTER_DISCOVER_TIME;
 			(*it)->timeOfRent = std::chrono::system_clock::now();
-			chosenAddr = (*it)->ipAddress;
+			chosenAddr = (*it);
+			assigned = true;
+		}
+		// get requested address by client if free
+		if((*it)->ipAddress.s_addr == requestedIPAddress && (*it)->isFree)
+		{
+			if(assigned)
+			{
+				chosenAddr->leaseTime = 0;
+				chosenAddr->isFree = true;
+			}
+			std::memcpy(&((*it)->chaddr)[0], chaddrClient, DHCPCORE_CHADDR_LENGTH);
+			(*it)->isFree = false;
+			(*it)->leaseTime = BLOCK_ADDRESS_AFTER_DISCOVER_TIME;
+			(*it)->timeOfRent = std::chrono::system_clock::now();
+			chosenAddr = (*it);
+			assigned = true;
+		}
+		// get the address the client already had in past if it's free
+		if(std::memcmp((*it)->chaddr, chaddrClient, DHCPCORE_CHADDR_LENGTH) == 0)
+		{
+			if(assigned)
+			{
+				chosenAddr->leaseTime = 0;
+				chosenAddr->isFree = true;
+			}
+			std::memcpy(&((*it)->chaddr)[0], chaddrClient, DHCPCORE_CHADDR_LENGTH);
+			(*it)->isFree = false;
+			(*it)->leaseTime = BLOCK_ADDRESS_AFTER_DISCOVER_TIME;
+			(*it)->timeOfRent = std::chrono::system_clock::now();
+			chosenAddr = (*it);
+			assigned = true;
 			break;
 		}
 	}
 	return chosenAddr;
 }
 
-
-void preProcessDHCPRequest(unsigned char* message, int messageLength, std::vector<negotiatedClient*> &dealInProgress)
+addressPoolItem* GetItemFromAddressPoolByMAC(unsigned char* clientChaddr, std::vector<addressPoolItem*> &addrPool)
 {
-	fprintf(stdout, "preProcessing DHCPRequest.\n");
+	addressPoolItem* item = nullptr;
+	for(std::vector<addressPoolItem*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
+	{
+		if(std::memcmp((*it)->chaddr, clientChaddr, DHCPCORE_CHADDR_LENGTH) == 0)
+		{
+			item = (*it);
+			break;
+		}
+	}
+	return item;
+}
+
+// return true if ip is in pool
+bool AddressInPool(uint32_t ip, serverSettings &serverSet)
+{
+	uint32_t first = ntohl(serverSet.poolFirst.s_addr);
+	uint32_t last = ntohl(serverSet.poolLast.s_addr);
+	uint32_t lookFor = ntohl(ip);
+	if(lookFor >= first && lookFor <= last)
+	{
+		return true;
+	}
+	return false;
+}
+
+bool AddressPoolItemTimeLeaseElapsed(addressPoolItem* item)
+{
+	if(item->isFree)
+		return true;
+	else if(item->leaseTime == std::numeric_limits<uint32_t>::max())
+	{
+		return false;
+	}
+	else
+	{
+		// check if time of lease elapsed and free address
+		std::chrono::time_point<std::chrono::system_clock, std::chrono::system_clock::duration> currentTime = 
+			std::chrono::system_clock::now();
+		auto difference = std::chrono::duration_cast<std::chrono::seconds>(currentTime - item->timeOfRent);
+		//std::cout << "Time elapsed: " << difference.count() << std::endl;
+		if(difference.count() > item->leaseTime)
+		{
+			item->isFree = true;
+			item->leaseTime = 0;
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * Process the DHCP Request message. 
+ */
+bool DHCPRequestProcessor(unsigned char* message, int messageLength, std::vector<negotiatedClient*> &dealInProgress, 
+	DHCPCore* dhcpCoreInstance, serverSettings &serverSet, sockaddr_in &clientSettings, sockaddr_in &sendSettings,
+	std::vector<addressPoolItem*> &addrPool)
+{
+	//fprintf(stdout, "preProcessing DHCPRequest.\n");
+	// load response to dhcp core class
+	dhcpCoreInstance->ProcessDHCPRequestMessage(message, messageLength);
+	if(dhcpCoreInstance->isError()) 
+	{
+		fprintf(stderr, "DHCPRequestProcessor -> Error in process DHCPOfferMessage!\n");
+		return false;
+	}
+	unsigned char chaddr[DHCPCORE_CHADDR_LENGTH];
+	dhcpCoreInstance->GetCurrentClientMacAddr(&chaddr[0], DHCPCORE_CHADDR_LENGTH);
+	// determine what the client want
+	uint32_t requestContainServerID = 0;
+	dhcpCoreInstance->getOptionValue(DHCPCORE_OPT_SERVER_IDENTIFIER, requestContainServerID);
+	if(requestContainServerID != 0)
+	{
+		// response to DHCPOffer
+		// find record in dealInProgress
+		std::cout << dealInProgress.size() << std::endl;
+		for(std::vector<negotiatedClient*>::iterator it = dealInProgress.begin(); it != dealInProgress.end(); ++it)
+		{
+			if(std::memcmp((*it)->chaddr, chaddr, DHCPCORE_CHADDR_LENGTH) == 0 && (*it)->xid == dhcpCoreInstance->getCurrentXID(true))
+			{
+				// send dhcp ack message - broadcast
+				dhcpCoreInstance->createDHCPAckMessage((*it)->addrOffered->ipAddress, serverSet);
+				if(dhcpCoreInstance->isError())
+				{
+					fprintf(stderr, "DHCPRequestProcessor -> Error in create DHCPAckMessage!\n");
+					return false;
+				}
+				// mark address as used
+				std::memcpy((*it)->addrOffered->chaddr, chaddr, DHCPCORE_CHADDR_LENGTH);
+				(*it)->addrOffered->leaseTime = serverSet.leaseTime;
+				(*it)->addrOffered->timeOfRent = std::chrono::system_clock::now();
+				(*it)->addrOffered->isFree = false;
+				// remove from dealInprogress
+				it = dealInProgress.erase(it);
+				//fprintf(stdout, "Found chaddr, generating ack. Address blocked: %s\n", inet_ntoa((*it)->addrOffered->ipAddress));
+				return true;
+			}
+		}
+		fprintf(stderr, "DHCPRequestProcessor -> Cannot find ip address temporary blocked for this client. Invalid DHCPRequest message.\n");	
+	}
+	else
+	{
+		// record of client must be in address pool (if for some reason it is not, remain silent)
+		addressPoolItem* recordOfClient = GetItemFromAddressPoolByMAC(chaddr, addrPool);
+		if(recordOfClient != nullptr)
+		{
+			// request to verify and extend lease time
+			uint32_t optionRequestIPAddress = 0;
+			dhcpCoreInstance->getOptionValue(50, optionRequestIPAddress);
+			in_addr ciaddr = dhcpCoreInstance->getCurrentClientCiaddr();
+			if(optionRequestIPAddress != 0 && ciaddr.s_addr == 0)
+			{	// INIT-REBOOT STATE			
+				// check if requested ip address is in pool and the mask is good (the mask is not set in server ettings, skipping check of NETMASK).
+				in_addr giaddr = dhcpCoreInstance->getCurrentClientGiaddr();
+				if(AddressInPool(optionRequestIPAddress, serverSet))
+				{	
+					// extend lease time, and extend lease time from server settings
+					recordOfClient->timeOfRent = std::chrono::system_clock::now();
+					recordOfClient->leaseTime = serverSet.leaseTime;
+					recordOfClient->isFree = false;
+					if(giaddr.s_addr == 0) // send  255.255.255.255, broadcast bit 0
+					{
+						dhcpCoreInstance->createDHCPAckMessage(recordOfClient->ipAddress, serverSet);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCPRequestProcessor -> Error in create DHCPAckMessage!\n");
+							return false;
+						}
+					}
+					else	// send 255.255.255.255, broadcast bit 1
+					{
+						dhcpCoreInstance->createDHCPAckMessage(recordOfClient->ipAddress, serverSet, true);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCPRequestProcessor -> Error in create DHCPAckMessage!\n");
+							return false;
+						}
+					}
+				}
+				else // send NACK
+				{
+					if(giaddr.s_addr == 0) // send  255.255.255.255, broadcast bit 0
+					{
+						dhcpCoreInstance->createDHCPNackMessage(serverSet);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCPRequestProcessor -> Error in create DHCPNackMessage!\n");
+							return false;
+						}
+					}
+					else	// send 255.255.255.255, broadcast bit 1
+					{
+						dhcpCoreInstance->createDHCPNackMessage(serverSet, true);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCPRequestProcessor -> Error in create DHCPNackMessage!\n");
+							return false;
+						}
+					}
+				}
+			}
+			else
+			{	
+				// extend lease time, and extend lease time from server settings
+				recordOfClient->timeOfRent = std::chrono::system_clock::now();
+				recordOfClient->leaseTime = serverSet.leaseTime;
+				recordOfClient->isFree = false;
+				// create DHCPAck
+				dhcpCoreInstance->createDHCPAckMessage(recordOfClient->ipAddress, serverSet);
+				// if RENEWING send by unicast to ciaddr
+				if(!AddressPoolItemTimeLeaseElapsed(recordOfClient))
+				{	
+					sendSettings.sin_addr = ciaddr;
+				}
+			}
+			return true;
+		}
+		else
+		{
+			fprintf(stderr, "Unknown client is trying to INIT-REBOOT/RENEWING/REBINDING. Ignoring.\n");
+		}		
+	}
+	return false;
 }
 
 
@@ -175,16 +392,21 @@ int main(int argc, char* argv[])
 	}
 	// fill server identifier
 	serverSet.serverIdentifier = DHCPCore::getDeviceIP(chosenInterface);
+	if(serverSet.serverIdentifier.s_addr == 0)
+	{
+		fprintf(stderr, "Cannot get IP address of server interface: %s\n", chosenInterface.c_str());
+		exit(1);
+	}
 	// prepare free addresses structure
 	uint32_t addrCount = ntohl(serverSet.poolLast.s_addr) - ntohl(serverSet.poolFirst.s_addr) + 1;
 	// address pool
-	std::vector<addressPool*> addrPool;
+	std::vector<addressPoolItem*> addrPool;
 	// fill address pool
 	for(uint32_t i = 0; i < addrCount; ++i)
 	{
-		struct addressPool *temp = new addressPool();
+		struct addressPoolItem *temp = new addressPoolItem();
 		temp->ipAddress.s_addr = serverSet.poolFirst.s_addr + htonl(i);
-		std::memset(&temp->chaddr, 0, CHADDR_LENGTH);
+		std::memset(&temp->chaddr, 0, DHCPCORE_CHADDR_LENGTH);
 		temp->leaseTime = 0;
 		temp->timeOfRent = std::chrono::system_clock::now();
 		temp->isFree = true;
@@ -231,18 +453,22 @@ int main(int argc, char* argv[])
 		exit(1);
 	}	
 	// set parameters for server address and connect socket to it
-	struct sockaddr_in clientSettings;
+	struct sockaddr_in clientSettings, sendSettings;
 	memset(&clientSettings, 0, sizeof(clientSettings));
+	memset(&clientSettings, 0, sizeof(sendSettings));
 	clientSettings.sin_family = AF_INET;
+	sendSettings.sin_family = AF_INET;
 	clientSettings.sin_port = htons(DHCP_CLIENT_PORT);
+	sendSettings.sin_port = htons(DHCP_CLIENT_PORT);
 	// set IPv4 broadcast
 	if ((inet_pton(AF_INET, DHCP_CLIENT_ADDRESS, &clientSettings.sin_addr)) <= 0)
 	{
 		fprintf(stderr, "Cannot set server address (%s) -> inet_pton error.\n", DHCP_SERVER_ADDRESS);
 		exit(1);
 	}
+	sendSettings.sin_addr = clientSettings.sin_addr;
 
-	/*for(std::vector<addressPool*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
+	/*for(std::vector<addressPoolItem*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
 	{
 		fprintf(stdout, "Address: %s\n", inet_ntoa((*it)->ipAddress));
 		fprintf(stdout, "MAC: %s\n", (*it)->chaddr);
@@ -260,6 +486,8 @@ int main(int argc, char* argv[])
 	// deal in process
 	std::vector<negotiatedClient*> dealInProgress;
 
+	// index of address pool
+	int addressPoolIndex = 0;
 	// start process messages from clients
 	while(true)
 	{		
@@ -267,6 +495,9 @@ int main(int argc, char* argv[])
 		{
 			break;
 		}
+		// reset sending address
+		sendSettings.sin_port = clientSettings.sin_port
+		sendSettings.sin_addr = clientSettings.sin_addr;
 		std::memset(&message, 0, sizeof(message));
 		int receivedSize = recvfrom(senderSocket, &message[0], messageLength, MSG_DONTWAIT, (sockaddr *)&si_other, &slen);
 		if(receivedSize > 0)
@@ -294,55 +525,166 @@ int main(int argc, char* argv[])
 						// create DHCP core class
 						DHCPCore* dhcpCoreInstance = new DHCPCore(1);
 						dhcpCoreInstance->ProcessDHCPDiscoverMessage(message, receivedSize);
-						in_addr ipAddrTemp = GetFreeIPAddressToOffer(addrPool);
-						// is not free address, send DHCPNack
-						if(ipAddrTemp.s_addr == 0)
+						if(dhcpCoreInstance->isError())
 						{
-							dhcpCoreInstance->createDHCPNAckMessage();
+							fprintf(stderr, "DHCP_TYPE_DISCOVER -> Error in create DHCPOfferMessage!\n");
+							success = false;
+							delete(dhcpCoreInstance);
+							break;
 						}
-						// send DHCPOffer
-						else
+						// check if DISCOVER contain option 50 -> requested IP Address
+						uint32_t requestedIPAddress = 0;
+						dhcpCoreInstance->getOptionValue(50, requestedIPAddress);
+						// get currect client MAC Address
+						unsigned char chaddr[DHCPCORE_CHADDR_LENGTH];
+						dhcpCoreInstance->GetCurrentClientMacAddr(&chaddr[0], DHCPCORE_CHADDR_LENGTH);
+						// get ip according MAC or IP assigned to MAC in past which is free or some free IP address
+						addressPoolItem* ipAddrTemp = GetFreeIPAddressToOffer(addrPool, requestedIPAddress, &chaddr[0]);
+						if(ipAddrTemp != nullptr)
 						{
-							dhcpCoreInstance->createDHCPOfferMessage(ipAddrTemp, serverSet);
+							dhcpCoreInstance->createDHCPOfferMessage(ipAddrTemp->ipAddress, serverSet);
 							if(dhcpCoreInstance->isError())
 							{
 								fprintf(stderr, "DHCP_TYPE_DISCOVER -> Error in create DHCPOfferMessage!\n");
 								success = false;
+								delete(dhcpCoreInstance);
 								break;
 							}
 							// save the xid and MAC identifier to dealInProgress
-							unsigned char macAddr[CHADDR_LENGTH];
-							dhcpCoreInstance->GetCurrentClientMacAddr(&macAddr[0], CHADDR_LENGTH);
-							negotiatedClient* item = new negotiatedClient(macAddr, dhcpCoreInstance->getCurrentXID());
+							unsigned char macAddr[DHCPCORE_CHADDR_LENGTH];
+							dhcpCoreInstance->GetCurrentClientMacAddr(&macAddr[0], DHCPCORE_CHADDR_LENGTH);
+							negotiatedClient* item = new negotiatedClient(&macAddr[0], dhcpCoreInstance->getCurrentXID(), ipAddrTemp);
 							dealInProgress.push_back(item);
+
 							// send message
+							sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&sendSettings, sizeof(sockaddr));
 						}
-						sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&clientSettings, sizeof(sockaddr));
+						else
+						{
+							fprintf(stderr, "No free address on server.\n");
+						}
 						delete(dhcpCoreInstance);
 					}
 					break;
 				case DHCP_TYPE_REQUEST:
-					preProcessDHCPRequest(message, receivedSize, dealInProgress);
-					// check if MAC and xid combination is known, if not, check if the mac address and ip is already assigned, extend lease time
-					// process dhcp request
-
-					// save response to client by broadcast
+					{
+						DHCPCore* dhcpCoreInstance = new DHCPCore(1);
+						bool shouldSend = DHCPRequestProcessor(message, receivedSize, dealInProgress, dhcpCoreInstance, serverSet, clientSettings, sendSettings,
+											addrPool);
+						// send message
+						if(shouldSend)
+						{
+							sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&sendSettings, sizeof(sockaddr));
+						}
+						delete(dhcpCoreInstance);
+					}
 					break;
 				case DHCP_TYPE_DECLINE:
-					// client refuse, because somebody is using this message, no answer only mark IP not to use
+					{
+						DHCPCore* dhcpCoreInstance = new DHCPCore(1);
+						dhcpCoreInstance->ProcessDHCPDeclineMessage(message, receivedSize);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCP_TYPE_DECLINE -> Error in create ProcessDHCPDeclineMessage!\n");
+							success = false;
+							delete(dhcpCoreInstance);
+							break; 
+						}
+						uint32_t serverID = 0;
+						dhcpCoreInstance->getOptionValue(DHCPCORE_OPT_SERVER_IDENTIFIER, serverID);
+						if(serverID == serverSet.serverIdentifier.s_addr)
+						{
+							// block IP address in pool
+							uint32_t ipAddrToBlock = 0;
+							dhcpCoreInstance->getOptionValue(DHCPCORE_OPT_REQUESTED_IP, ipAddrToBlock);
+							for(std::vector<addressPoolItem*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
+							{
+								if((*it)->ipAddress.s_addr == ipAddrToBlock)
+								{
+									(*it)->leaseTime = std::numeric_limits<uint32_t>::max();
+									(*it)->isFree = false;
+									std::memset((*it)->chaddr, 0, DHCPCORE_CHADDR_LENGTH);
+								}
+							}
+						}
+						delete(dhcpCoreInstance);
+
+					}
+					// client refuse, because somebody is using this address, no answer only mark IP not to use
 					break;
 				case DHCP_TYPE_RELEASE:
-					// check if server id is yours and release address
+					{
+						DHCPCore* dhcpCoreInstance = new DHCPCore(1);
+						dhcpCoreInstance->ProcessDHCPReleaseMessage(message, receivedSize);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCP_TYPE_DECLINE -> Error in create ProcessDHCPReleaseMessage!\n");
+							success = false;
+							delete(dhcpCoreInstance);
+							break;
+						}
+						uint32_t serverID = 0;
+						dhcpCoreInstance->getOptionValue(DHCPCORE_OPT_SERVER_IDENTIFIER, serverID);
+						if(serverID == serverSet.serverIdentifier.s_addr)
+						{
+							// block IP address in pool
+							in_addr ipAddrToBlock = dhcpCoreInstance->getCurrentClientCiaddr();
+							for(std::vector<addressPoolItem*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
+							{
+								if((*it)->ipAddress.s_addr == ipAddrToBlock.s_addr)
+								{
+									(*it)->leaseTime = 0;
+									(*it)->isFree = true;
+								}
+							}
+						}
+						delete(dhcpCoreInstance);
+					}
 					break;
 				case DHCP_TYPE_INFORM:
 					// send response by direct message!
 					// send DHCPAck response with all info
-					break;
+					{
+						DHCPCore* dhcpCoreInstance = new DHCPCore(1);
+						dhcpCoreInstance->ProcessDHCPInformMessage(message, receivedSize);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCP_TYPE_INFORM -> Error in create ProcessDHCPInformMessage!\n");
+							success = false;
+							delete(dhcpCoreInstance);
+							break;
+						}
+						// no ip for this request
+						in_addr clientIP = dhcpCoreInstance->getCurrentClientCiaddr();
+						dhcpCoreInstance->createDHCPAckMessage(clientIP, serverSet);
+						if(dhcpCoreInstance->isError())
+						{
+							fprintf(stderr, "DHCP_TYPE_INFORM -> Error in create createDHCPAckMessage!\n");
+							success = false;
+							delete(dhcpCoreInstance);
+							break;
+						}
+						// send informations
+						sendSettings.sin_addr = clientIP;
+						sendto(senderSocket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), 0, (sockaddr*)&sendSettings, sizeof(sockaddr));
+						delete(dhcpCoreInstance);
+					}
+					break; 
 			}
 			if(!success)
 				break;
 		}
 		// check if lease time of some addresses do not end, set them free if yes
+		// managing address pool -> relase if lease time over
+		int counterLimit = ADDRESS_POOL_MANAGING_COUNT;
+		if(ADDRESS_POOL_MANAGING_COUNT > addrPool.size())	// no need to check one address more than once in each round
+			counterLimit = addrPool.size();
+		for(int i = 0; i < counterLimit; ++i)
+		{	
+			addressPoolIndex = (++addressPoolIndex) % addrPool.size();
+			addressPoolItem* item = addrPool.at(addressPoolIndex);
+			AddressPoolItemTimeLeaseElapsed(item);
+		}
 	}
 
 
@@ -355,7 +697,7 @@ int main(int argc, char* argv[])
 	// close socket
 	close(senderSocket);
 	// delete address pool
-	for(std::vector<addressPool*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
+	for(std::vector<addressPoolItem*>::iterator it = addrPool.begin(); it != addrPool.end(); ++it)
 	{
 		delete(*it);
 	}

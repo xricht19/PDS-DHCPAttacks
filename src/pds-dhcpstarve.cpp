@@ -101,7 +101,7 @@ void dhcpStarveClient(int socket, struct sockaddr_in &serverSettings, int thread
 	while(true)
 	{
 		// check if SIGINT
-		if(sigIntCatched)
+		if(sigIntCatched) 
 		{
 			delete(dhcpCoreInstance);
 			fprintf(stdout, "Catched SIGINT, terminating thread: %d.\n", threadNumber);
@@ -120,7 +120,7 @@ void dhcpStarveClient(int socket, struct sockaddr_in &serverSettings, int thread
 				{
 					// error occured tidy up and exi
 					delete(dhcpCoreInstance);
-					decreaseThreadCounter();
+					decreaseThreadCounter(); 
 					return;
 				}
 				sendMessage(socket, dhcpCoreInstance->getMessage(), dhcpCoreInstance->getSizeOfMessage(), (sockaddr*)&serverSettings);

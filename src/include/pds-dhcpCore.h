@@ -17,7 +17,7 @@
 #include <iostream>
 #include <ctime>
 
-#define _DEBUG_
+//#define _DEBUG_
 
 // DHCP Message settings
 #define DHCPCORE_CHADDR_LENGTH 16
@@ -50,6 +50,14 @@
 // DHCP Offer settings
 #define DHCPCORE_OFFER_OP 2 // BOOTREPLY
 #define DHCPCORE_OFFER_CLIENT_IP "0.0.0.0"
+
+#define DHCPCORE_ACK_OP 2
+#define DHCPCORE_NACK_OP 2
+
+// DHCP options
+#define DHCPCORE_OPT_SERVER_IDENTIFIER 54
+#define DHCPCORE_OPT_REQUESTED_IP 50
+
 
 #ifndef SERVER_SETTINGS_STRUCT
 #define SERVER_SETTINGS_STRUCT 
@@ -120,18 +128,19 @@ public:
 	~DHCPCore();
 
 	// DHCP messages
-	void createDHCPDiscoverMessage();
+	void createDHCPDiscoverMessage(); 
 	void createDHCPOfferMessage(in_addr &ipAddrToOffer, serverSettings &serverSet);
 	void createDHCPRequestMessage();
-	void createDHCPAckMessage(serverSettings* serverSet);
-	void createDHCPNAckMessage();
+	void createDHCPAckMessage(in_addr &ipAddrToOffer, serverSettings &serverSet, bool broadCastBitSet = false);
+	void createDHCPNackMessage(serverSettings &serverSet, bool broadCastBitSet = false);
 
-	void ProcessDHCPDiscoverMessage(unsigned char* message, int &messageLength);
+	void ProcessDHCPDiscoverMessage(unsigned char* message, int &messageLength); 
 	void ProcessDHCPOfferMessage(unsigned char* message, int &messageLength);
 	void ProcessDHCPRequestMessage(unsigned char* message, int &messageLength);
 	void ProcessDHCPAckMessage(unsigned char* message, int &messageLength);
-	// get device IP address
-	void getDeviceIPAddressNetMask(std::string deviceName);
+	void ProcessDHCPDeclineMessage(unsigned char* message, int &messageLength);
+	void ProcessDHCPReleaseMessage(unsigned char* message, int &messageLength);
+	void ProcessDHCPInformMessage(unsigned char* message, int &messageLength);
 
 	// function to print error
 	bool isError();
@@ -145,9 +154,10 @@ public:
 	unsigned char* getMessage();
 	int getSizeOfMessage();
 
-	uint32_t getCurrentXID();
+	uint32_t getCurrentXID(bool fromResponse = false);
 	uint32_t getOfferedIPAddress() { return _offeredIPAddress; }
-
+	in_addr getCurrentClientCiaddr() { return _dhcpMessageResponse->ciaddr; }
+	in_addr getCurrentClientGiaddr() { return _dhcpMessageResponse->giaddr; }
 	void GetCurrentClientMacAddr(unsigned char* macAddr, int length);
 
 	// returns the value of given option number from response, work only if value can be stored in uint32_t (max 4 octets)

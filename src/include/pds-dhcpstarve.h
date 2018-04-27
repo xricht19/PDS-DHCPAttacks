@@ -27,7 +27,7 @@
 #define WAIT_FOR_RESPONSE_TIME 30000		// 30 sec
 
 // threads variables
-#define MAX_THREADS_COUNT 1
+#define MAX_THREADS_COUNT 255
 #define STOP_TIMEOUT_LIMIT -1	// -1 the attack is never stopped
 
 enum ERR_CODES {
