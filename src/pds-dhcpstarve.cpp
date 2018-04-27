@@ -141,7 +141,7 @@ void dhcpStarveClient(int socket, struct sockaddr_in &serverSettings, int thread
 					uint32_t ipAddr = dhcpCoreInstance->getOfferedIPAddress();
 					char str[INET_ADDRSTRLEN];
 					inet_ntop(AF_INET, &ipAddr, str, INET_ADDRSTRLEN);
-					fprintf(stdout, "Thread %d:IP address:%s, obtained!\n", threadNumber, str);
+					//fprintf(stdout, "Thread %d:IP address:%s, obtained!\n", threadNumber, str);
 					// successful, increase the number of threads
 					addToMaxThreadCount(1);
 					delete(dhcpCoreInstance);
@@ -155,7 +155,7 @@ void dhcpStarveClient(int socket, struct sockaddr_in &serverSettings, int thread
 		std::chrono::duration<double, std::milli> ms = std::chrono::high_resolution_clock::now() - timeStart;
 		if(ms.count() > WAIT_FOR_RESPONSE_TIME)
 		{
-			fprintf(stderr, "Time out for offer!\n");
+			//fprintf(stderr, "Time out for offer!\n");
 			currentErrorCount(1);
 			// time out, decrease the number of threads
 			addToMaxThreadCount(-1);

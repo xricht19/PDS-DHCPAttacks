@@ -191,7 +191,6 @@ bool DHCPRequestProcessor(unsigned char* message, int messageLength, std::vector
 	{
 		// response to DHCPOffer
 		// find record in dealInProgress
-		std::cout << dealInProgress.size() << std::endl;
 		for(std::vector<negotiatedClient*>::iterator it = dealInProgress.begin(); it != dealInProgress.end(); ++it)
 		{
 			if(std::memcmp((*it)->chaddr, chaddr, DHCPCORE_CHADDR_LENGTH) == 0 && (*it)->xid == dhcpCoreInstance->getCurrentXID(true))
@@ -496,7 +495,7 @@ int main(int argc, char* argv[])
 			break;
 		}
 		// reset sending address
-		sendSettings.sin_port = clientSettings.sin_port
+		sendSettings.sin_port = clientSettings.sin_port;
 		sendSettings.sin_addr = clientSettings.sin_addr;
 		std::memset(&message, 0, sizeof(message));
 		int receivedSize = recvfrom(senderSocket, &message[0], messageLength, MSG_DONTWAIT, (sockaddr *)&si_other, &slen);
@@ -515,7 +514,6 @@ int main(int argc, char* argv[])
 				fprintf(stderr, "Cannot find DHCP message type in packet!\n");
 				break;
 			}
-			std::cout << "Type: " << type << std::endl;
 			bool success = true;
 			// switch dhcp types and generate response
 			switch(type)

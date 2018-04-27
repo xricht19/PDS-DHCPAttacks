@@ -380,7 +380,7 @@ void DHCPCore::ProcessDHCPAckMessage(unsigned char* message, int &messageLength)
 
 void DHCPCore::createDHCPAckMessage(in_addr &ipAddrToOffer, serverSettings &serverSet, bool broadCastBitSet)
 {
-	fprintf(stdout, "Creating DHCPAck message.\n");
+	//fprintf(stdout, "Creating DHCPAck message.\n");
 	// init message
 	std::memset(_dhcpMessage, 0, sizeof(dhcp_packet));
 	// set values
@@ -451,7 +451,7 @@ void DHCPCore::createDHCPAckMessage(in_addr &ipAddrToOffer, serverSettings &serv
 
 void DHCPCore::createDHCPNackMessage(serverSettings &serverSet, bool broadCastBitSet)
 {
-	fprintf(stdout, "Creating DHCPNack message.\n");
+	//fprintf(stdout, "Creating DHCPNack message.\n");
 	// init message
 	std::memset(_dhcpMessage, 0, sizeof(dhcp_packet));
 	// set values
