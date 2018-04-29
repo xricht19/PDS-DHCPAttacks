@@ -22,12 +22,14 @@
 #define DHCP_CLIENT_ADDRESS "255.255.255.255"
 #define ETHERNET_MTU 1500
 
-// times constant
+// time client wait before check if response from server was received
 #define WAIT_BEFORE_CHECK_SOCKET_AGAIN 100	// 0.1 sec
+// time wait for response from DHCP server, the client give up after time elapsed
 #define WAIT_FOR_RESPONSE_TIME 30000		// 30 sec
 
-// threads variables
-#define MAX_THREADS_COUNT 255
+// number of threads
+#define MAX_THREADS_COUNT 50
+// attack is stopped if these number of clients fail to obtain IP address
 #define STOP_TIMEOUT_LIMIT -1	// -1 the attack is never stopped
 
 enum ERR_CODES {

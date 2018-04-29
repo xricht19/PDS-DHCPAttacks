@@ -209,7 +209,7 @@ bool DHCPRequestProcessor(unsigned char* message, int messageLength, std::vector
 				(*it)->addrOffered->isFree = false;
 				// remove from dealInprogress
 				it = dealInProgress.erase(it);
-				//fprintf(stdout, "Found chaddr, generating ack. Address blocked: %s\n", inet_ntoa((*it)->addrOffered->ipAddress));
+				fprintf(stdout, "Address: %s, given to: %s\n", inet_ntoa((*it)->addrOffered->ipAddress), chaddr);
 				return true;
 			}
 		}
@@ -227,7 +227,7 @@ bool DHCPRequestProcessor(unsigned char* message, int messageLength, std::vector
 			in_addr ciaddr = dhcpCoreInstance->getCurrentClientCiaddr();
 			if(optionRequestIPAddress != 0 && ciaddr.s_addr == 0)
 			{	// INIT-REBOOT STATE			
-				// check if requested ip address is in pool and the mask is good (the mask is not set in server ettings, skipping check of NETMASK).
+				// check if requested ip address is in pool and the mask is good (the mask is not set in server settings, skipping check of NETMASK).
 				in_addr giaddr = dhcpCoreInstance->getCurrentClientGiaddr();
 				if(AddressInPool(optionRequestIPAddress, serverSet))
 				{	
